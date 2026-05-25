@@ -22,5 +22,8 @@ pnpm-debug.log*
 # vercel
 .vercel
 
+# supabase cli
+supabase/.temp
+
 # typescript
 *.tsbuildinfo
