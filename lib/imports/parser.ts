@@ -36,6 +36,17 @@ export type ParsedImport = {
   rows: ParsedImportRow[];
 };
 
+type AiImportMappingSuggestion = {
+  header_row_index: number;
+  rows_to_ignore_before_index: number;
+  date_column: string;
+  amount_column: string;
+  balance_column: string;
+  description_column: string;
+  confidence: number;
+  reasoning_summary: string;
+};
+
 type ParseImportFileInput = {
   buffer: Buffer;
   fileName: string;
@@ -67,12 +78,14 @@ export async function parseImportFile(input: ParseImportFileInput): Promise<Pars
     sourceFormat === "csv"
       ? parseCsv(input.buffer.toString("utf8"))
       : await parseXlsx(input.buffer);
+  const aiMapping = hasReliableTransactionHeader(table) ? null : await suggestMappingWithAi(table);
 
   return parseTable({
     table,
     accountId: input.accountId,
     defaultCurrency: input.defaultCurrency,
-    sourceFormat
+    sourceFormat,
+    aiMapping
   });
 }
 
@@ -116,12 +129,12 @@ function parseTable(input: {
   accountId: string;
   defaultCurrency: string;
   sourceFormat: ImportSourceFormat;
+  aiMapping?: AiImportMappingSuggestion | null;
 }): ParsedImport {
-  const [headerRow, ...dataRows] = input.table.filter((row) =>
-    row.some((cell) => cell.trim().length > 0)
-  );
+  const table = input.table.map((row) => trimTrailingEmptyCells(row));
+  const header = resolveHeader(table, input.aiMapping);
 
-  if (!headerRow) {
+  if (!header) {
     return {
       sourceFormat: input.sourceFormat,
       mapping: {},
@@ -129,9 +142,13 @@ function parseTable(input: {
     };
   }
 
-  const headers = headerRow.map((header, index) => header.trim() || `Column ${index + 1}`);
-  const mapping = detectColumnMapping(headers);
+  const headers = header.row.map((headerCell, index) => headerCell.trim() || `Column ${index + 1}`);
+  const mapping = header.mapping ?? detectColumnMapping(headers);
   const seenDuplicateKeys = new Set<string>();
+  const dataRows = table
+    .slice(header.index + 1)
+    .filter((row) => row.some((cell) => cell.trim().length > 0))
+    .map((row) => alignRowToHeaders(row, headers, mapping));
 
   const rows = dataRows.map((row, rowIndex) => {
     const rawRow = headers.reduce<Record<string, string>>((record, header, index) => {
@@ -223,6 +240,336 @@ function detectColumnMapping(headers: string[]): ImportColumnMapping {
     balance: takeHeader(balanceHeaders),
     currency: takeHeader(currencyHeaders)
   };
+}
+
+function hasReliableTransactionHeader(rows: string[][]): boolean {
+  return findReliableHeaderIndex(rows.map((row) => trimTrailingEmptyCells(row))) !== null;
+}
+
+function resolveHeader(
+  rows: string[][],
+  aiMapping?: AiImportMappingSuggestion | null
+): {
+  index: number;
+  row: string[];
+  mapping?: ImportColumnMapping;
+} | null {
+  const aiHeader = resolveAiHeader(rows, aiMapping);
+
+  if (aiHeader) {
+    return aiHeader;
+  }
+
+  const reliableHeaderIndex = findReliableHeaderIndex(rows);
+
+  if (reliableHeaderIndex !== null) {
+    return {
+      index: reliableHeaderIndex,
+      row: rows[reliableHeaderIndex]
+    };
+  }
+
+  const firstMeaningfulIndex = rows.findIndex((row) =>
+    row.some((cell) => cell.trim().length > 0)
+  );
+
+  if (firstMeaningfulIndex === -1) {
+    return null;
+  }
+
+  return {
+    index: firstMeaningfulIndex,
+    row: rows[firstMeaningfulIndex]
+  };
+}
+
+function findReliableHeaderIndex(rows: string[][]): number | null {
+  const index = rows.findIndex((row) => isLikelyTransactionHeader(row));
+  return index === -1 ? null : index;
+}
+
+function isLikelyTransactionHeader(row: string[]): boolean {
+  const meaningfulCells = row.filter((cell) => cell.trim().length > 0);
+
+  if (meaningfulCells.length < 3) {
+    return false;
+  }
+
+  const mapping = detectColumnMapping(row);
+  const hasDate = Boolean(mapping.date);
+  const hasDescription = Boolean(mapping.description);
+  const hasAmount = Boolean(mapping.amount || mapping.debit || mapping.credit);
+
+  return hasDate && hasDescription && hasAmount;
+}
+
+function alignRowToHeaders(
+  row: string[],
+  headers: string[],
+  mapping: ImportColumnMapping
+): string[] {
+  const trimmedRow = trimTrailingEmptyCells(row);
+
+  if (trimmedRow.length <= headers.length) {
+    return trimmedRow;
+  }
+
+  const descriptionIndex = mapping.description
+    ? headers.findIndex((header) => header === mapping.description)
+    : -1;
+
+  if (descriptionIndex === -1) {
+    return trimmedRow;
+  }
+
+  const aligned: string[] = [];
+  let sourceIndex = 0;
+
+  for (let targetIndex = 0; targetIndex < headers.length; targetIndex += 1) {
+    if (targetIndex === descriptionIndex) {
+      const fieldsAfterDescription = headers.length - descriptionIndex - 1;
+      const descriptionEnd = Math.max(sourceIndex + 1, trimmedRow.length - fieldsAfterDescription);
+      aligned[targetIndex] = trimmedRow.slice(sourceIndex, descriptionEnd).join(",").trim();
+      sourceIndex = descriptionEnd;
+      continue;
+    }
+
+    aligned[targetIndex] = trimmedRow[sourceIndex] ?? "";
+    sourceIndex += 1;
+  }
+
+  return aligned;
+}
+
+function resolveAiHeader(
+  rows: string[][],
+  aiMapping?: AiImportMappingSuggestion | null
+): {
+  index: number;
+  row: string[];
+  mapping: ImportColumnMapping;
+} | null {
+  if (!aiMapping || aiMapping.confidence < 0.7) {
+    return null;
+  }
+
+  const headerIndex = Number.isInteger(aiMapping.header_row_index)
+    ? aiMapping.header_row_index
+    : aiMapping.rows_to_ignore_before_index;
+
+  if (headerIndex < 0 || headerIndex >= rows.length) {
+    return null;
+  }
+
+  const headers = rows[headerIndex].map((header, index) => header.trim() || `Column ${index + 1}`);
+  const mapping: ImportColumnMapping = {
+    date: resolveSuggestedColumn(headers, aiMapping.date_column),
+    amount: resolveSuggestedColumn(headers, aiMapping.amount_column),
+    balance: resolveSuggestedColumn(headers, aiMapping.balance_column),
+    description: resolveSuggestedColumn(headers, aiMapping.description_column)
+  };
+
+  if (!mapping.date || !mapping.amount || !mapping.description) {
+    return null;
+  }
+
+  const mappedColumns = Object.values(mapping).filter(Boolean);
+
+  if (new Set(mappedColumns).size !== mappedColumns.length) {
+    return null;
+  }
+
+  return {
+    index: headerIndex,
+    row: headers,
+    mapping
+  };
+}
+
+function resolveSuggestedColumn(headers: string[], suggestion: string): string | undefined {
+  const trimmed = suggestion.trim();
+  const numericIndex = Number.parseInt(trimmed, 10);
+
+  if (Number.isInteger(numericIndex)) {
+    const zeroBased = numericIndex >= 1 ? numericIndex - 1 : numericIndex;
+
+    if (headers[zeroBased]) {
+      return headers[zeroBased];
+    }
+  }
+
+  const normalizedSuggestion = normalizeHeader(trimmed);
+
+  return headers.find((header) => normalizeHeader(header) === normalizedSuggestion);
+}
+
+async function suggestMappingWithAi(rows: string[][]): Promise<AiImportMappingSuggestion | null> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+
+  if (!apiKey) {
+    return null;
+  }
+
+  const sampleRows = rows.slice(0, 20).map((row, index) => ({
+    index,
+    columns: row.slice(0, 12).map((cell) => cell.slice(0, 200))
+  }));
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL_CLASSIFICATION || "gpt-5.4-mini",
+        input: [
+          {
+            role: "system",
+            content:
+              "Identify the transaction table header and column mapping for a bank export. Return only the requested JSON. Do not infer or create transactions."
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              task:
+                "Find the transaction header row and map date, amount, balance, and description columns. Rows are zero-indexed.",
+              sample_rows: sampleRows
+            })
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "import_mapping_suggestion",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "header_row_index",
+                "rows_to_ignore_before_index",
+                "date_column",
+                "amount_column",
+                "balance_column",
+                "description_column",
+                "confidence",
+                "reasoning_summary"
+              ],
+              properties: {
+                header_row_index: { type: "integer", minimum: 0 },
+                rows_to_ignore_before_index: { type: "integer", minimum: 0 },
+                date_column: { type: "string" },
+                amount_column: { type: "string" },
+                balance_column: { type: "string" },
+                description_column: { type: "string" },
+                confidence: { type: "number", minimum: 0, maximum: 1 },
+                reasoning_summary: { type: "string" }
+              }
+            }
+          }
+        }
+      })
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    const outputText = extractResponseText(data);
+
+    if (!outputText) {
+      return null;
+    }
+
+    return validateAiMapping(JSON.parse(outputText));
+  } catch {
+    return null;
+  }
+}
+
+function extractResponseText(data: Record<string, unknown>): string | null {
+  if (typeof data.output_text === "string") {
+    return data.output_text;
+  }
+
+  if (!Array.isArray(data.output)) {
+    return null;
+  }
+
+  for (const outputItem of data.output) {
+    if (!isRecord(outputItem) || !Array.isArray(outputItem.content)) {
+      continue;
+    }
+
+    for (const contentItem of outputItem.content) {
+      if (!isRecord(contentItem)) {
+        continue;
+      }
+
+      if (typeof contentItem.text === "string") {
+        return contentItem.text;
+      }
+    }
+  }
+
+  return null;
+}
+
+function validateAiMapping(value: unknown): AiImportMappingSuggestion | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const headerRowIndex = getFiniteNumber(value.header_row_index);
+  const rowsToIgnoreBeforeIndex = getFiniteNumber(value.rows_to_ignore_before_index);
+  const confidence = getFiniteNumber(value.confidence);
+  const dateColumn = getString(value.date_column);
+  const amountColumn = getString(value.amount_column);
+  const balanceColumn = getString(value.balance_column);
+  const descriptionColumn = getString(value.description_column);
+  const reasoningSummary = getString(value.reasoning_summary);
+
+  if (
+    headerRowIndex === null ||
+    rowsToIgnoreBeforeIndex === null ||
+    confidence === null ||
+    !dateColumn ||
+    !amountColumn ||
+    !descriptionColumn ||
+    !reasoningSummary
+  ) {
+    return null;
+  }
+
+  return {
+    header_row_index: Math.trunc(headerRowIndex),
+    rows_to_ignore_before_index: Math.trunc(rowsToIgnoreBeforeIndex),
+    date_column: dateColumn,
+    amount_column: amountColumn,
+    balance_column: balanceColumn ?? "",
+    description_column: descriptionColumn,
+    confidence: Math.max(0, Math.min(1, confidence)),
+    reasoning_summary: reasoningSummary
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getString(value: unknown): string | null {
+  return typeof value === "string" ? value.trim() : null;
+}
+
+function getFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return value;
 }
 
 function findHeader(
@@ -332,6 +679,15 @@ function parseDateValue(value: string | null): string | null {
   const isoMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(trimmed);
   if (isoMatch) {
     return formatDateParts(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
+  }
+
+  const yearFirstSlashMatch = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(trimmed);
+  if (yearFirstSlashMatch) {
+    return formatDateParts(
+      Number(yearFirstSlashMatch[1]),
+      Number(yearFirstSlashMatch[2]),
+      Number(yearFirstSlashMatch[3])
+    );
   }
 
   const slashMatch = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/.exec(trimmed);

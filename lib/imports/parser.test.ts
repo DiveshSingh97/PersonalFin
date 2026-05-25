@@ -93,6 +93,57 @@ describe("parseCsvImport", () => {
     expect(result.rows[1].status).toBe("duplicate");
   });
 
+  it("ignores FNB-style preamble rows and preserves comma descriptions", () => {
+    const result = parseCsvImport({
+      accountId: "account-1",
+      defaultCurrency: "ZAR",
+      csv: [
+        "ACCOUNT TRANSACTION HISTORY",
+        "",
+        "Name:, Test, User",
+        "Account:, 123456789, [Easy Account]",
+        "Balance:, 707.45, 20861.77",
+        "",
+        "Date, Amount, Balance, Description",
+        "2026/05/25, -1222.00, 0.00, FNBCC DCRE1925255 260525",
+        "2026/05/25, 22142.60, 0.00, FNB OB PMT Y",
+        "2026/05/23, -23.15, 707.45, BYC DEBIT 62845480657",
+        "2026/05/22, -110.00, 730.60, PURCH CANVA 400738******4647",
+        "2026/05/22, -39.94, 840.60, PURCH DL UBER 400738******4647",
+        "2026/05/23, 300.00, 880.54, FNB APP TRANSFER FROM FUEL",
+        "2026/05/24, -10.00, 870.54, CR.INT.RATE   4,39000"
+      ].join("\n")
+    });
+
+    expect(result.mapping).toMatchObject({
+      date: "Date",
+      amount: "Amount",
+      balance: "Balance",
+      description: "Description"
+    });
+    expect(result.rows).toHaveLength(7);
+    expect(result.rows.every((row) => row.status === "approved")).toBe(true);
+    expect(result.rows.every((row) => row.errorCode === null)).toBe(true);
+    expect(result.rows[0]).toMatchObject({
+      transactionDate: "2026-05-25",
+      descriptionRaw: "FNBCC DCRE1925255 260525",
+      amount: -1222,
+      balance: 0,
+      direction: "expense"
+    });
+    expect(result.rows[1]).toMatchObject({
+      amount: 22142.6,
+      direction: "income"
+    });
+    expect(result.rows[6]).toMatchObject({
+      transactionDate: "2026-05-24",
+      descriptionRaw: "CR.INT.RATE   4,39000",
+      amount: -10,
+      balance: 870.54,
+      direction: "expense"
+    });
+  });
+
   it("parses single-column XLSX rows that contain CSV text", async () => {
     const buffer = await buildSingleColumnCsvXlsx([
       "Date,Description,Amount,Balance",
