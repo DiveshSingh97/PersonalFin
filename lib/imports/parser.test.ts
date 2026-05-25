@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDuplicateKey, parseCsvImport } from "@/lib/imports/parser";
+import ExcelJS from "exceljs";
+import { buildDuplicateKey, parseCsvImport, parseImportFile } from "@/lib/imports/parser";
 
 describe("parseCsvImport", () => {
   it("maps signed amount CSV rows into approved staged rows", () => {
@@ -91,4 +92,75 @@ describe("parseCsvImport", () => {
     expect(result.rows[0].status).toBe("approved");
     expect(result.rows[1].status).toBe("duplicate");
   });
+
+  it("parses single-column XLSX rows that contain CSV text", async () => {
+    const buffer = await buildSingleColumnCsvXlsx([
+      "Date,Description,Amount,Balance",
+      "2026-05-01,Salary,1000.00,1000.00",
+      "2026-05-02,Groceries,-125.50,874.50",
+      "2026-05-03,Netflix,-199.00,675.50",
+      "2026-05-03,Netflix,-199.00,675.50"
+    ]);
+
+    const result = await parseImportFile({
+      accountId: "account-1",
+      buffer,
+      defaultCurrency: "ZAR",
+      fileName: "smoke-test.xlsx"
+    });
+
+    expect(result.sourceFormat).toBe("xlsx");
+    expect(result.mapping).toMatchObject({
+      date: "Date",
+      description: "Description",
+      amount: "Amount",
+      balance: "Balance"
+    });
+    const mappedColumns = Object.values(result.mapping).filter(Boolean);
+    expect(new Set(mappedColumns).size).toBe(mappedColumns.length);
+    expect(result.rows).toHaveLength(4);
+    expect(result.rows[0]).toMatchObject({
+      transactionDate: "2026-05-01",
+      descriptionRaw: "Salary",
+      amount: 1000,
+      balance: 1000,
+      direction: "income",
+      status: "approved"
+    });
+    expect(result.rows[1]).toMatchObject({
+      transactionDate: "2026-05-02",
+      descriptionRaw: "Groceries",
+      amount: -125.5,
+      balance: 874.5,
+      direction: "expense",
+      status: "approved"
+    });
+    expect(result.rows[2]).toMatchObject({
+      transactionDate: "2026-05-03",
+      descriptionRaw: "Netflix",
+      amount: -199,
+      direction: "expense",
+      status: "approved"
+    });
+    expect(result.rows[3]).toMatchObject({
+      transactionDate: "2026-05-03",
+      descriptionRaw: "Netflix",
+      amount: -199,
+      direction: "expense",
+      status: "duplicate",
+      errorCode: "duplicate_in_file"
+    });
+  });
 });
+
+async function buildSingleColumnCsvXlsx(lines: string[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Export");
+
+  lines.forEach((line) => {
+    worksheet.addRow([line]);
+  });
+
+  const output = await workbook.xlsx.writeBuffer();
+  return Buffer.from(output);
+}
