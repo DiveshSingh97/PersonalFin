@@ -1,0 +1,94 @@
+import { describe, expect, it } from "vitest";
+import { buildDuplicateKey, parseCsvImport } from "@/lib/imports/parser";
+
+describe("parseCsvImport", () => {
+  it("maps signed amount CSV rows into approved staged rows", () => {
+    const result = parseCsvImport({
+      accountId: "account-1",
+      defaultCurrency: "ZAR",
+      csv: [
+        "Date,Description,Amount,Balance",
+        "2026-05-01,Salary,1000.00,1000.00",
+        "2026-05-02,Groceries,-125.50,874.50"
+      ].join("\n")
+    });
+
+    expect(result.sourceFormat).toBe("csv");
+    expect(result.mapping).toMatchObject({
+      date: "Date",
+      description: "Description",
+      amount: "Amount"
+    });
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows[0]).toMatchObject({
+      amount: 1000,
+      direction: "income",
+      status: "approved"
+    });
+    expect(result.rows[1]).toMatchObject({
+      amount: -125.5,
+      direction: "expense",
+      status: "approved"
+    });
+  });
+
+  it("normalizes debit and credit columns into signed amounts", () => {
+    const result = parseCsvImport({
+      accountId: "account-1",
+      defaultCurrency: "ZAR",
+      csv: [
+        "Transaction Date,Details,Debit,Credit",
+        "01/05/2026,Card purchase,45.20,",
+        "02/05/2026,Refund,,12.30"
+      ].join("\n")
+    });
+
+    expect(result.rows[0]).toMatchObject({
+      transactionDate: "2026-05-01",
+      amount: -45.2,
+      direction: "expense"
+    });
+    expect(result.rows[1]).toMatchObject({
+      transactionDate: "2026-05-02",
+      amount: 12.3,
+      direction: "income"
+    });
+  });
+
+  it("marks missing required values as invalid", () => {
+    const result = parseCsvImport({
+      accountId: "account-1",
+      defaultCurrency: "ZAR",
+      csv: ["Date,Description,Amount", "2026-05-01,,25.00"].join("\n")
+    });
+
+    expect(result.rows[0]).toMatchObject({
+      status: "invalid",
+      errorCode: "parse_error"
+    });
+    expect(result.rows[0].errorMessage).toContain("Missing description");
+  });
+
+  it("marks duplicate rows within the same file", () => {
+    const duplicateKey = buildDuplicateKey({
+      accountId: "account-1",
+      transactionDate: "2026-05-01",
+      amount: -10,
+      descriptionClean: "Coffee"
+    });
+
+    const result = parseCsvImport({
+      accountId: "account-1",
+      defaultCurrency: "ZAR",
+      csv: [
+        "Date,Description,Amount",
+        "2026-05-01,Coffee,-10.00",
+        "2026-05-01, coffee ,-10.00"
+      ].join("\n")
+    });
+
+    expect(result.rows[0].duplicateKey).toBe(duplicateKey);
+    expect(result.rows[0].status).toBe("approved");
+    expect(result.rows[1].status).toBe("duplicate");
+  });
+});

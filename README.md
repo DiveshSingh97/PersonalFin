@@ -1,8 +1,8 @@
 # PersonalFin
 
-PersonalFin is an ingestion-first personal finance planning dashboard. The MVP starts with a clean Next.js foundation for uploaded financial exports, import review, and normalized transaction records.
+PersonalFin is an ingestion-first personal finance planning dashboard. The MVP starts with uploaded financial exports, import review, and normalized transaction records.
 
-This scaffold intentionally does not include AI features, a database schema, or any hardcoded personal financial data.
+This app intentionally does not include AI features, investment/debt simulation, or any hardcoded personal financial data.
 
 ## Stack
 
@@ -11,6 +11,7 @@ This scaffold intentionally does not include AI features, a database schema, or 
 - TypeScript
 - Tailwind CSS
 - Supabase browser and server clients
+- Supabase Storage and Postgres
 - Zod environment validation
 
 ## Local Development
@@ -39,6 +40,12 @@ Build locally:
 
 ```bash
 npm run build
+```
+
+Run parser tests:
+
+```bash
+npm run test
 ```
 
 ## Supabase Setup
@@ -73,6 +80,27 @@ supabase db push
 For manual setup, open the Supabase SQL editor and run the files in `supabase/migrations` in timestamp order.
 
 The initial migrations create the ingestion tables, indexes, Row Level Security policies, and default transaction categories. They do not create the `financial-uploads` Storage bucket; create that bucket separately and keep it private.
+
+### Testing With A Fake CSV
+
+Create a small CSV locally with non-personal sample data:
+
+```csv
+Date,Description,Amount,Balance
+2026-05-01,Salary,1000.00,1000.00
+2026-05-02,Groceries,-125.50,874.50
+```
+
+Then:
+
+1. Sign in through Supabase Auth.
+2. Create an account on `/accounts`.
+3. Upload the CSV on `/uploads`.
+4. Review staged rows on `/imports/[id]/review`.
+5. Confirm the import.
+6. View normalized transactions on `/transactions`.
+
+Undo is available from the review page after a batch has been committed.
 
 ## Vercel Deployment
 
@@ -120,14 +148,8 @@ Never commit real `.env`, `.env.local`, or `.env.*.local` files.
 - `/uploads`
 - `/transactions`
 - `/imports`
+- `/imports/[id]/review`
 
 ## Next Recommended Task
 
-Add the ingestion data model and import specification, then implement the upload pipeline:
-
-1. Store raw files in private Supabase Storage.
-2. Create an import batch for every upload.
-3. Parse CSV/XLSX rows into staging records.
-4. Review mappings and uncertain rows.
-5. Detect duplicates before committing normalized transactions.
-6. Keep every import batch undoable.
+Add review editing and column mapping controls so invalid staged rows can be corrected before commit.
