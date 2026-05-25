@@ -202,20 +202,39 @@ function parseTable(input: {
 }
 
 function detectColumnMapping(headers: string[]): ImportColumnMapping {
+  const usedHeaders = new Set<string>();
+  const takeHeader = (candidates: string[]) => {
+    const header = findHeader(headers, candidates, usedHeaders);
+
+    if (header) {
+      usedHeaders.add(header);
+    }
+
+    return header;
+  };
+
   return {
-    date: findHeader(headers, dateHeaders),
-    postedDate: findHeader(headers, postedDateHeaders),
-    description: findHeader(headers, descriptionHeaders),
-    amount: findHeader(headers, amountHeaders),
-    debit: findHeader(headers, debitHeaders),
-    credit: findHeader(headers, creditHeaders),
-    balance: findHeader(headers, balanceHeaders),
-    currency: findHeader(headers, currencyHeaders)
+    date: takeHeader(dateHeaders),
+    postedDate: takeHeader(postedDateHeaders),
+    description: takeHeader(descriptionHeaders),
+    amount: takeHeader(amountHeaders),
+    debit: takeHeader(debitHeaders),
+    credit: takeHeader(creditHeaders),
+    balance: takeHeader(balanceHeaders),
+    currency: takeHeader(currencyHeaders)
   };
 }
 
-function findHeader(headers: string[], candidates: string[]): string | undefined {
+function findHeader(
+  headers: string[],
+  candidates: string[],
+  usedHeaders: Set<string>
+): string | undefined {
   return headers.find((header) => {
+    if (usedHeaders.has(header)) {
+      return false;
+    }
+
     const normalized = normalizeHeader(header);
     return candidates.some((candidate) => normalized === candidate || normalized.includes(candidate));
   });
@@ -448,10 +467,39 @@ async function parseXlsx(buffer: Buffer): Promise<string[][]> {
 
   worksheet.eachRow({ includeEmpty: false }, (worksheetRow) => {
     const values = Array.isArray(worksheetRow.values) ? worksheetRow.values.slice(1) : [];
-    rows.push(values.map((value) => formatXlsxCell(value)));
+    rows.push(trimTrailingEmptyCells(values.map((value) => formatXlsxCell(value))));
   });
 
+  if (isSingleColumnCsvLikeTable(rows)) {
+    return parseCsv(rows.map((row) => row[0] ?? "").join("\n"));
+  }
+
   return rows;
+}
+
+function isSingleColumnCsvLikeTable(rows: string[][]): boolean {
+  const meaningfulRows = rows.filter((row) => row.some((cell) => cell.trim().length > 0));
+
+  if (meaningfulRows.length < 2) {
+    return false;
+  }
+
+  if (meaningfulRows.some((row) => row.filter((cell) => cell.trim().length > 0).length > 1)) {
+    return false;
+  }
+
+  const csvLikeRows = meaningfulRows.filter((row) => (row[0] ?? "").includes(","));
+  return csvLikeRows.length >= 2;
+}
+
+function trimTrailingEmptyCells(values: string[]): string[] {
+  const trimmed = [...values];
+
+  while (trimmed.length > 0 && !trimmed[trimmed.length - 1].trim()) {
+    trimmed.pop();
+  }
+
+  return trimmed;
 }
 
 function formatXlsxCell(value: unknown): string {
