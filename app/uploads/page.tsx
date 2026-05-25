@@ -1,5 +1,6 @@
 import { FileSpreadsheet, Upload } from "lucide-react";
 import { PageShell } from "@/components/page-shell";
+import { AuthNotice } from "@/components/auth-notice";
 import { loadUploadFormData } from "@/lib/db/server";
 import { uploadImportAction } from "@/lib/imports/actions";
 
@@ -15,7 +16,7 @@ export default async function UploadsPage() {
       description="Upload CSV or XLSX exports, store the raw file privately, and stage rows for review."
     >
       {pageData.status === "unauthenticated" ? (
-        <SetupNotice message="Sign in with Supabase Auth to upload files." />
+        <AuthNotice message="Sign in with Supabase Auth to upload files." />
       ) : pageData.status === "setup_error" ? (
         <SetupNotice message={pageData.message} />
       ) : (

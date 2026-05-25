@@ -144,6 +144,7 @@ Never commit real `.env`, `.env.local`, or `.env.*.local` files.
 
 - `/`
 - `/dashboard`
+- `/login`
 - `/accounts`
 - `/uploads`
 - `/transactions`

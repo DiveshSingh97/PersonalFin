@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, RotateCcw } from "lucide-react";
 import { PageShell } from "@/components/page-shell";
+import { AuthNotice } from "@/components/auth-notice";
 import { loadImportReview } from "@/lib/db/server";
 import { confirmImportAction, undoImportAction } from "@/lib/imports/actions";
 
@@ -22,7 +23,7 @@ export default async function ImportReviewPage({ params }: ImportReviewPageProps
       description="Inspect staged rows, duplicate candidates, and parse issues before committing transactions."
     >
       {pageData.status === "unauthenticated" ? (
-        <SetupNotice message="Sign in with Supabase Auth to review imports." />
+        <AuthNotice message="Sign in with Supabase Auth to review imports." />
       ) : pageData.status === "setup_error" ? (
         <SetupNotice message={pageData.message} />
       ) : (

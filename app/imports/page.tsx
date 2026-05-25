@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
+import { AuthNotice } from "@/components/auth-notice";
 import { loadImports } from "@/lib/db/server";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ export default async function ImportsPage() {
       description="Review staged imports, track parse results, and manage confirmed or undone batches."
     >
       {pageData.status === "unauthenticated" ? (
-        <SetupNotice message="Sign in with Supabase Auth to view imports." />
+        <AuthNotice message="Sign in with Supabase Auth to view imports." />
       ) : pageData.status === "setup_error" ? (
         <SetupNotice message={pageData.message} />
       ) : (

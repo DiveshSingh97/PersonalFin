@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Banknote, Database, FileUp, LayoutDashboard, Repeat2 } from "lucide-react";
+import { Banknote, Database, FileUp, LayoutDashboard, LogIn, Repeat2 } from "lucide-react";
 import { clsx } from "clsx";
 
 const navItems = [
@@ -30,6 +30,11 @@ const navItems = [
     href: "/imports",
     label: "Imports",
     icon: Repeat2
+  },
+  {
+    href: "/login",
+    label: "Sign in",
+    icon: LogIn
   }
 ];
 

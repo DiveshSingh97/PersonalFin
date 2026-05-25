@@ -1,4 +1,5 @@
 import { PageShell } from "@/components/page-shell";
+import { AuthNotice } from "@/components/auth-notice";
 import { loadTransactions } from "@/lib/db/server";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ export default async function TransactionsPage() {
       description="View normalized transactions that were confirmed from import batches."
     >
       {pageData.status === "unauthenticated" ? (
-        <SetupNotice message="Sign in with Supabase Auth to view transactions." />
+        <AuthNotice message="Sign in with Supabase Auth to view transactions." />
       ) : pageData.status === "setup_error" ? (
         <SetupNotice message={pageData.message} />
       ) : (

@@ -1,4 +1,5 @@
 import { PageShell } from "@/components/page-shell";
+import { AuthNotice } from "@/components/auth-notice";
 import { createAccountAction } from "@/lib/imports/actions";
 import { loadAccounts } from "@/lib/db/server";
 
@@ -23,7 +24,7 @@ export default async function AccountsPage() {
       description="Create and manage the financial accounts that own uploaded files, import batches, and normalized transactions."
     >
       {pageData.status === "unauthenticated" ? (
-        <SetupNotice message="Sign in with Supabase Auth to view and create accounts." />
+        <AuthNotice message="Sign in with Supabase Auth to view and create accounts." />
       ) : pageData.status === "setup_error" ? (
         <SetupNotice message={pageData.message} />
       ) : (
