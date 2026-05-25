@@ -6,7 +6,14 @@ import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/db/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getServerEnv } from "@/lib/env";
-import { parseImportFile } from "@/lib/imports/parser";
+import { type ImportColumnMapping, parseImportFile } from "@/lib/imports/parser";
+import {
+  applyDuplicateStatuses,
+  calculateStagedStatusCounts,
+  mapRawRowWithMapping,
+  normalizeStatus,
+  validateStagedRow
+} from "@/lib/imports/review";
 
 const accountTypes = new Set(["bank", "credit_card", "investment", "crypto", "debt", "manual"]);
 
@@ -244,6 +251,10 @@ export async function confirmImportAction(formData: FormData) {
     redirect(`/imports/${batchId}/review`);
   }
 
+  if (batch.status === "undone") {
+    redirect(`/imports/${batchId}/review`);
+  }
+
   await admin
     .from("import_batches")
     .update({ status: "committing" })
@@ -264,13 +275,31 @@ export async function confirmImportAction(formData: FormData) {
     throw stagedError;
   }
 
+  const { data: alreadyCommitted, error: committedLookupError } = await admin
+    .from("transactions")
+    .select("staged_transaction_id")
+    .eq("import_batch_id", batchId)
+    .eq("user_id", user.id)
+    .is("deleted_at", null);
+
+  if (committedLookupError) {
+    throw committedLookupError;
+  }
+
+  const alreadyCommittedStagedIds = new Set(
+    (alreadyCommitted ?? [])
+      .map((row) => row.staged_transaction_id)
+      .filter((id): id is string => Boolean(id))
+  );
+
   const approvedRows = (stagedRows ?? []).filter(
     (row) =>
       row.account_id &&
       row.transaction_date &&
       row.description_raw &&
       row.amount !== null &&
-      row.direction
+      row.direction &&
+      !alreadyCommittedStagedIds.has(row.id)
   );
 
   const existingDuplicateKeys = await findExistingDuplicateCandidates({
@@ -399,6 +428,239 @@ export async function undoImportAction(formData: FormData) {
   redirect(`/imports/${batchId}/review`);
 }
 
+export async function updateImportMappingAction(formData: FormData) {
+  const user = await requireCurrentUser();
+  const batchId = getTextField(formData, "batch_id");
+
+  if (!batchId) {
+    throw new Error("Import batch is required.");
+  }
+
+  const mapping = readMappingFromForm(formData);
+  const admin = createServiceRoleClient();
+  const { data: batch, error: batchError } = await admin
+    .from("import_batches")
+    .select("id,user_id,account_id,uploaded_file_id,status,mapping_json")
+    .eq("id", batchId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (batchError) {
+    throw batchError;
+  }
+
+  if (batch.status === "committed" || batch.status === "undone") {
+    redirect(`/imports/${batchId}/review`);
+  }
+
+  const { data: account, error: accountError } = batch.account_id
+    ? await admin
+        .from("financial_accounts")
+        .select("id,currency")
+        .eq("id", batch.account_id)
+        .eq("user_id", user.id)
+        .single()
+    : { data: null, error: null };
+
+  if (accountError) {
+    throw accountError;
+  }
+
+  const { data: stagedRows, error: stagedError } = await admin
+    .from("staged_transactions")
+    .select("id,raw_row,duplicate_candidate_transaction_id")
+    .eq("import_batch_id", batchId)
+    .eq("user_id", user.id)
+    .order("row_number", { ascending: true });
+
+  if (stagedError) {
+    throw stagedError;
+  }
+
+  const mappedRows = (stagedRows ?? []).map((row) =>
+    mapRawRowWithMapping({
+      rawRow: (row.raw_row ?? {}) as Record<string, unknown>,
+      mapping,
+      accountId: batch.account_id,
+      defaultCurrency: String(account?.currency ?? "ZAR"),
+      duplicateCandidateTransactionId: row.duplicate_candidate_transaction_id
+    })
+  );
+
+  const duplicateCandidateIds = await findExistingDuplicateCandidates({
+    userId: user.id,
+    accountId: batch.account_id,
+    duplicateKeys: mappedRows
+      .map((row) => row.duplicate_key)
+      .filter((key): key is string => Boolean(key))
+  });
+  const duplicateAwareRows = applyDuplicateStatuses(
+    mappedRows,
+    new Set(duplicateCandidateIds.keys()),
+    duplicateCandidateIds
+  );
+
+  await Promise.all(
+    (stagedRows ?? []).map((row, index) =>
+      admin
+        .from("staged_transactions")
+        .update(duplicateAwareRows[index])
+        .eq("id", row.id)
+        .eq("user_id", user.id)
+    )
+  );
+
+  await admin
+    .from("import_batches")
+    .update({
+      mapping_json: {
+        ...(isRecord(batch.mapping_json) ? batch.mapping_json : {}),
+        ...mapping,
+        review_mapping_updated_at: new Date().toISOString()
+      },
+      status: "reviewing",
+      error_message: null
+    })
+    .eq("id", batchId)
+    .eq("user_id", user.id);
+
+  await refreshImportBatchCounts(batchId, user.id);
+  revalidatePath("/imports");
+  revalidatePath(`/imports/${batchId}/review`);
+  redirect(`/imports/${batchId}/review`);
+}
+
+export async function updateStagedRowAction(formData: FormData) {
+  const user = await requireCurrentUser();
+  const batchId = getTextField(formData, "batch_id");
+  const rowId = getTextField(formData, "row_id");
+
+  if (!batchId || !rowId) {
+    throw new Error("Import batch and row are required.");
+  }
+
+  const admin = createServiceRoleClient();
+  const { data: batch, error: batchError } = await admin
+    .from("import_batches")
+    .select("id,status")
+    .eq("id", batchId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (batchError) {
+    throw batchError;
+  }
+
+  if (batch.status === "committed" || batch.status === "undone") {
+    redirect(`/imports/${batchId}/review`);
+  }
+
+  const { data: currentRow, error: rowError } = await admin
+    .from("staged_transactions")
+    .select("id,account_id,duplicate_candidate_transaction_id")
+    .eq("id", rowId)
+    .eq("import_batch_id", batchId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (rowError) {
+    throw rowError;
+  }
+
+  const validated = validateStagedRow({
+    id: currentRow.id,
+    accountId: currentRow.account_id,
+    transactionDate: getTextField(formData, "transaction_date") || null,
+    postedDate: getTextField(formData, "posted_date") || null,
+    descriptionRaw: getTextField(formData, "description_raw") || null,
+    amount: getNumberField(formData, "amount"),
+    currency: getTextField(formData, "currency") || null,
+    direction: getDirectionField(formData, "direction"),
+    status: normalizeStatus(getTextField(formData, "status")),
+    duplicateCandidateTransactionId: currentRow.duplicate_candidate_transaction_id
+  });
+  const duplicateChecked = await protectEditedRowFromAccidentalDuplicate({
+    userId: user.id,
+    batchId,
+    rowId,
+    row: validated
+  });
+
+  const { error: updateError } = await admin
+    .from("staged_transactions")
+    .update(duplicateChecked)
+    .eq("id", rowId)
+    .eq("user_id", user.id);
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  await refreshImportBatchCounts(batchId, user.id);
+  revalidatePath("/imports");
+  revalidatePath(`/imports/${batchId}/review`);
+}
+
+export async function bulkUpdateStagedRowsAction(formData: FormData) {
+  const user = await requireCurrentUser();
+  const batchId = getTextField(formData, "batch_id");
+  const action = getTextField(formData, "bulk_action");
+  const rowIds = formData
+    .getAll("row_id")
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (!batchId) {
+    throw new Error("Import batch is required.");
+  }
+
+  if (rowIds.length === 0) {
+    redirect(`/imports/${batchId}/review`);
+  }
+
+  const admin = createServiceRoleClient();
+  const { data: batch, error: batchError } = await admin
+    .from("import_batches")
+    .select("id,status")
+    .eq("id", batchId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (batchError) {
+    throw batchError;
+  }
+
+  if (batch.status === "committed" || batch.status === "undone") {
+    redirect(`/imports/${batchId}/review`);
+  }
+
+  const now = new Date().toISOString();
+  const rowsToUpdate =
+    action === "approve" || action === "approve_duplicates"
+      ? await loadRowsForBulkApproval({
+          userId: user.id,
+          batchId,
+          rowIds,
+          allowDuplicateOverride: action === "approve_duplicates"
+        })
+      : rowIds.map((id) => ({
+          id,
+          status: action === "skip" ? "skipped" : "needs_review",
+          error_code: null,
+          error_message: null,
+          reviewed_at: now
+        }));
+
+  await Promise.all(
+    rowsToUpdate.map((row) =>
+      admin.from("staged_transactions").update(row).eq("id", row.id).eq("user_id", user.id)
+    )
+  );
+
+  await refreshImportBatchCounts(batchId, user.id);
+  revalidatePath("/imports");
+  revalidatePath(`/imports/${batchId}/review`);
+}
+
 async function findExistingDuplicateCandidates(input: {
   userId: string;
   accountId: string | null;
@@ -431,6 +693,174 @@ async function findExistingDuplicateCandidates(input: {
   return new Map((data ?? []).map((row) => [String(row.duplicate_key), String(row.id)]));
 }
 
+async function protectEditedRowFromAccidentalDuplicate(input: {
+  userId: string;
+  batchId: string;
+  rowId: string;
+  row: ReturnType<typeof validateStagedRow>;
+}): Promise<ReturnType<typeof validateStagedRow>> {
+  if (input.row.status !== "approved" || !input.row.duplicate_key) {
+    return input.row;
+  }
+
+  const admin = createServiceRoleClient();
+  const [{ data: existingTransactions, error: transactionError }, { data: stagedMatches, error: stagedError }] =
+    await Promise.all([
+      admin
+        .from("transactions")
+        .select("id")
+        .eq("user_id", input.userId)
+        .eq("duplicate_key", input.row.duplicate_key)
+        .is("deleted_at", null)
+        .limit(1),
+      admin
+        .from("staged_transactions")
+        .select("id")
+        .eq("user_id", input.userId)
+        .eq("import_batch_id", input.batchId)
+        .eq("duplicate_key", input.row.duplicate_key)
+        .neq("id", input.rowId)
+        .in("status", ["approved", "committed"])
+        .limit(1)
+    ]);
+
+  if (transactionError) {
+    throw transactionError;
+  }
+
+  if (stagedError) {
+    throw stagedError;
+  }
+
+  const duplicateTransactionId = existingTransactions?.[0]?.id
+    ? String(existingTransactions[0].id)
+    : null;
+
+  if (!duplicateTransactionId && (stagedMatches ?? []).length === 0) {
+    return input.row;
+  }
+
+  return {
+    ...input.row,
+    duplicate_candidate_transaction_id: duplicateTransactionId,
+    status: "duplicate",
+    error_code: duplicateTransactionId ? "duplicate_existing_transaction" : "duplicate_in_file",
+    error_message: duplicateTransactionId
+      ? "Duplicate candidate already exists"
+      : "Duplicate candidate within this import"
+  };
+}
+
+async function loadRowsForBulkApproval(input: {
+  userId: string;
+  batchId: string;
+  rowIds: string[];
+  allowDuplicateOverride: boolean;
+}) {
+  const admin = createServiceRoleClient();
+  const { data: rows, error } = await admin
+    .from("staged_transactions")
+    .select(
+      "id,account_id,transaction_date,posted_date,description_raw,amount,currency,direction,status,duplicate_key,duplicate_candidate_transaction_id"
+    )
+    .eq("user_id", input.userId)
+    .eq("import_batch_id", input.batchId)
+    .in("id", input.rowIds);
+
+  if (error) {
+    throw error;
+  }
+
+  const now = new Date().toISOString();
+
+  return (rows ?? []).map((row) => {
+    if (
+      (row.status === "duplicate" || row.duplicate_candidate_transaction_id) &&
+      input.allowDuplicateOverride
+    ) {
+      return {
+        id: row.id,
+        status: "approved",
+        duplicate_key: row.duplicate_key ? `${row.duplicate_key}|override:${String(row.id).slice(0, 8)}` : null,
+        duplicate_candidate_transaction_id: null,
+        error_code: null,
+        error_message: null,
+        reviewed_at: now
+      };
+    }
+
+    const validated = validateStagedRow({
+      id: row.id,
+      accountId: row.account_id,
+      transactionDate: row.transaction_date,
+      postedDate: row.posted_date,
+      descriptionRaw: row.description_raw,
+      amount: row.amount === null ? null : Number(row.amount),
+      currency: row.currency,
+      direction: getDirectionValue(row.direction),
+      status: row.status === "duplicate" ? "duplicate" : "approved",
+      duplicateCandidateTransactionId: row.duplicate_candidate_transaction_id
+    });
+
+    return {
+      id: row.id,
+      ...validated,
+      status:
+        row.status === "duplicate" || row.duplicate_candidate_transaction_id
+          ? "duplicate"
+          : validated.status
+    };
+  });
+}
+
+async function refreshImportBatchCounts(batchId: string, userId: string) {
+  const admin = createServiceRoleClient();
+  const { data: rows, error } = await admin
+    .from("staged_transactions")
+    .select("status,error_code")
+    .eq("import_batch_id", batchId)
+    .eq("user_id", userId);
+
+  if (error) {
+    throw error;
+  }
+
+  const counts = calculateStagedStatusCounts(rows ?? []);
+  const { error: updateError } = await admin
+    .from("import_batches")
+    .update({
+      staged_rows: counts.total,
+      approved_rows: counts.approved,
+      committed_rows: counts.committed,
+      skipped_rows: counts.skipped,
+      duplicate_rows: counts.duplicate,
+      error_rows: counts.invalid + counts.needs_review
+    })
+    .eq("id", batchId)
+    .eq("user_id", userId);
+
+  if (updateError) {
+    throw updateError;
+  }
+}
+
+function readMappingFromForm(formData: FormData): ImportColumnMapping {
+  return {
+    date: getOptionalMapping(formData, "mapping_date"),
+    postedDate: getOptionalMapping(formData, "mapping_postedDate"),
+    description: getOptionalMapping(formData, "mapping_description"),
+    amount: getOptionalMapping(formData, "mapping_amount"),
+    debit: getOptionalMapping(formData, "mapping_debit"),
+    credit: getOptionalMapping(formData, "mapping_credit"),
+    balance: getOptionalMapping(formData, "mapping_balance"),
+    currency: getOptionalMapping(formData, "mapping_currency")
+  };
+}
+
+function getOptionalMapping(formData: FormData, field: string): string | undefined {
+  return getTextField(formData, field) || undefined;
+}
+
 function assertSupportedFile(fileName: string) {
   const lower = fileName.toLowerCase();
 
@@ -457,4 +887,30 @@ function makeSafeFileName(fileName: string): string {
 function getTextField(formData: FormData, field: string): string {
   const value = formData.get(field);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getNumberField(formData: FormData, field: string): number | null {
+  const value = getTextField(formData, field);
+
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getDirectionField(
+  formData: FormData,
+  field: string
+): "income" | "expense" | "transfer" | null {
+  return getDirectionValue(getTextField(formData, field));
+}
+
+function getDirectionValue(value: unknown): "income" | "expense" | "transfer" | null {
+  return value === "income" || value === "expense" || value === "transfer" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

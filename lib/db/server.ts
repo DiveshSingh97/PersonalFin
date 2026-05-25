@@ -7,9 +7,12 @@ import type {
   ImportBatchListItem,
   PageData,
   StagedTransaction,
+  TransactionCategory,
+  TransactionFilters,
   TransactionListItem,
   UploadedFile
 } from "@/lib/db/types";
+import { calculateStagedStatusCounts } from "@/lib/imports/review";
 
 export async function getCurrentUser(): Promise<User | null> {
   const supabase = await createClient();
@@ -71,10 +74,12 @@ export async function loadImports(): Promise<PageData<ImportBatchListItem[]>> {
   });
 }
 
-export async function loadTransactions(): Promise<PageData<TransactionListItem[]>> {
+export async function loadTransactions(
+  filters: TransactionFilters = {}
+): Promise<PageData<TransactionListItem[]>> {
   return withPageData(async (user) => {
     const admin = createServiceRoleClient();
-    const { data, error } = await admin
+    let query = admin
       .from("transactions")
       .select(
         "id,user_id,account_id,import_batch_id,transaction_date,description_raw,description_clean,amount,currency,direction,category_id,duplicate_key,created_at,financial_accounts(id,name),transaction_categories(name),import_batches(id)"
@@ -84,6 +89,32 @@ export async function loadTransactions(): Promise<PageData<TransactionListItem[]
       .order("transaction_date", { ascending: false })
       .limit(200);
 
+    if (filters.search) {
+      query = query.ilike("description_raw", `%${filters.search}%`);
+    }
+
+    if (filters.accountId) {
+      query = query.eq("account_id", filters.accountId);
+    }
+
+    if (filters.direction) {
+      query = query.eq("direction", filters.direction);
+    }
+
+    if (filters.categoryId) {
+      query = query.eq("category_id", filters.categoryId);
+    }
+
+    if (filters.dateFrom) {
+      query = query.gte("transaction_date", filters.dateFrom);
+    }
+
+    if (filters.dateTo) {
+      query = query.lte("transaction_date", filters.dateTo);
+    }
+
+    const { data, error } = await query;
+
     if (error) {
       throw error;
     }
@@ -91,6 +122,53 @@ export async function loadTransactions(): Promise<PageData<TransactionListItem[]
     return (data ?? []).map((row) =>
       normalizeTransactionListItem(row as Record<string, unknown>)
     );
+  });
+}
+
+export async function loadTransactionPageData(
+  filters: TransactionFilters
+): Promise<
+  PageData<{
+    transactions: TransactionListItem[];
+    accounts: FinancialAccount[];
+    categories: TransactionCategory[];
+    filters: TransactionFilters;
+  }>
+> {
+  return withPageData(async (user) => {
+    const admin = createServiceRoleClient();
+    const [transactions, accountsResult, categoriesResult] = await Promise.all([
+      loadTransactions(filters),
+      admin
+        .from("financial_accounts")
+        .select("id,user_id,name,institution_name,account_type,currency,is_active,created_at")
+        .eq("user_id", user.id)
+        .order("name", { ascending: true }),
+      admin
+        .from("transaction_categories")
+        .select("id,name,slug")
+        .or(`user_id.is.null,user_id.eq.${user.id}`)
+        .order("name", { ascending: true })
+    ]);
+
+    if (transactions.status !== "ready") {
+      throw new Error("Unable to load transactions.");
+    }
+
+    if (accountsResult.error) {
+      throw accountsResult.error;
+    }
+
+    if (categoriesResult.error) {
+      throw categoriesResult.error;
+    }
+
+    return {
+      transactions: transactions.data,
+      accounts: (accountsResult.data ?? []) as FinancialAccount[],
+      categories: (categoriesResult.data ?? []) as TransactionCategory[],
+      filters
+    };
   });
 }
 
@@ -117,11 +195,18 @@ export async function loadImportReview(
     account: FinancialAccount | null;
     uploadedFile: UploadedFile | null;
     stagedTransactions: StagedTransaction[];
+    sourceColumns: string[];
     counts: {
       total: number;
       parseErrors: number;
       duplicates: number;
       requiringReview: number;
+      approved: number;
+      invalid: number;
+      duplicate: number;
+      skipped: number;
+      committed: number;
+      needs_review: number;
     };
   }>
 > {
@@ -171,19 +256,21 @@ export async function loadImportReview(
     }
 
     const rows = (stagedTransactions ?? []) as StagedTransaction[];
+    const sourceColumns = Array.from(
+      rows.reduce((columns, row) => {
+        Object.keys(row.raw_row ?? {}).forEach((key) => columns.add(key));
+        return columns;
+      }, new Set<string>())
+    );
+    const counts = calculateStagedStatusCounts(rows);
 
     return {
       batch: typedBatch,
       account: account as FinancialAccount | null,
       uploadedFile: uploadedFile as UploadedFile | null,
       stagedTransactions: rows,
-      counts: {
-        total: rows.length,
-        parseErrors: rows.filter((row) => row.status === "invalid").length,
-        duplicates: rows.filter((row) => row.status === "duplicate").length,
-        requiringReview: rows.filter((row) => row.status === "invalid" || row.status === "needs_review")
-          .length
-      }
+      sourceColumns,
+      counts
     };
   });
 }

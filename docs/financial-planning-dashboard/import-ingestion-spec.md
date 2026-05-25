@@ -234,6 +234,8 @@ The review workflow should let the user:
 - skip invalid rows
 - approve valid rows
 - commit approved rows
+- adjust column mapping before commit and reprocess staged rows without creating a new raw upload
+- bulk mark staged rows as approved, skipped, or needs review
 
 Staged row statuses:
 
@@ -246,6 +248,8 @@ Staged row statuses:
 - `committed`
 
 Only `approved` rows should be inserted into `transactions`.
+
+Review edits are staging-only. Updating a staged row or changing column mapping must not mutate `transactions`; final records are only created through the confirm-import action. If a batch is already committed, remapping should be disabled unless a future workflow can safely undo and reprocess the batch.
 
 ## 14. MVP Acceptance Criteria
 
