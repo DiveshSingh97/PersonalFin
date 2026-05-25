@@ -33,7 +33,7 @@ APP_ENCRYPTION_KEY=
 CRON_SECRET=
 ```
 
-## Required for MVP
+## Required for MVP runtime
 
 ### NEXT_PUBLIC_APP_URL
 
@@ -110,6 +110,10 @@ SUPABASE_STORAGE_BUCKET=financial-uploads
 Create this bucket in Supabase Storage. It should be private.
 
 Used to store raw uploaded bank, investment, crypto, and debt exports before parsing.
+
+## Migration / ORM values
+
+These are not required for the current Next.js runtime because the app uses Supabase JS clients for database access. They are still useful for migrations, direct database tools, or a future ORM layer.
 
 ### DATABASE_URL
 
@@ -199,7 +203,7 @@ In Vercel:
 Project → Settings → Environment Variables
 ```
 
-Add these for Production, Preview, and Development where appropriate:
+Add these runtime values for Production, Preview, and Development where appropriate:
 
 ```text
 NEXT_PUBLIC_APP_URL
@@ -207,6 +211,11 @@ NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 SUPABASE_STORAGE_BUCKET
+```
+
+Add these only where you run migrations, direct database tools, or future ORM workflows:
+
+```text
 DATABASE_URL
 DIRECT_URL
 ```
