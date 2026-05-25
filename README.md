@@ -59,6 +59,21 @@ financial-uploads
 
 Keep Row Level Security enabled before storing real financial data. The service role key must only be used from server-only code.
 
+### Applying Database Migrations
+
+This project uses Supabase SQL migrations for the ingestion MVP.
+
+With the Supabase CLI:
+
+```bash
+supabase link --project-ref your-project-ref
+supabase db push
+```
+
+For manual setup, open the Supabase SQL editor and run the files in `supabase/migrations` in timestamp order.
+
+The initial migrations create the ingestion tables, indexes, Row Level Security policies, and default transaction categories. They do not create the `financial-uploads` Storage bucket; create that bucket separately and keep it private.
+
 ## Vercel Deployment
 
 1. Import `DiveshSingh97/PersonalFin` into Vercel.
