@@ -188,7 +188,26 @@ Rules:
 - Duplicate detection ignores undone transactions because they have `deleted_at` set.
 - Undo should be all-or-nothing in a database transaction when implemented.
 
-## 11. Reprocess Import Rules
+## 11. Confirm Import Rules
+
+Confirming an import batch should be database-atomic.
+
+Rules:
+
+- Confirm is performed by the Supabase Postgres RPC `confirm_import_batch`.
+- The RPC uses the authenticated user identity and only mutates records owned by that user.
+- The RPC locks the target import batch before processing so repeated confirm attempts cannot interleave.
+- Only staged rows with status `approved` are eligible for insertion into `transactions`.
+- Rows with status `invalid`, `duplicate`, `skipped`, `needs_review`, or `committed` are not inserted.
+- Approved rows missing required normalized fields are marked `invalid` inside the transaction before insert.
+- Approved rows whose duplicate key already exists on an active transaction are marked `duplicate` and skipped.
+- Approved rows inserted successfully are marked `committed` and linked to the created transaction.
+- Batch row counts and `committed_at` are updated in the same transaction as transaction insertion.
+- Re-running confirm on an already committed batch must not create duplicate transactions.
+
+Undo remains separate and soft-removes committed transactions by setting `deleted_at`.
+
+## 12. Reprocess Import Rules
 
 Reprocessing creates a new import batch instead of mutating the original batch.
 
@@ -199,7 +218,7 @@ Rules:
 - Original staged rows and errors remain unchanged.
 - If the original was committed, the user should undo it before committing the reprocessed batch unless the app can prove no duplicate normalized records will be created.
 
-## 12. Error Handling
+## 13. Error Handling
 
 Batch-level errors belong on `import_batches`.
 
@@ -223,7 +242,7 @@ Examples:
 
 Rows with errors should remain reviewable. Errors should not expose secrets or raw financial data in browser logs.
 
-## 13. Review Workflow
+## 14. Review Workflow
 
 The review workflow should let the user:
 
@@ -251,7 +270,7 @@ Only `approved` rows should be inserted into `transactions`.
 
 Review edits are staging-only. Updating a staged row or changing column mapping must not mutate `transactions`; final records are only created through the confirm-import action. If a batch is already committed, remapping should be disabled unless a future workflow can safely undo and reprocess the batch.
 
-## 14. MVP Acceptance Criteria
+## 15. MVP Acceptance Criteria
 
 The ingestion MVP schema is acceptable when:
 
