@@ -82,6 +82,7 @@ export type Transaction = {
   user_id: string;
   account_id: string;
   import_batch_id: string | null;
+  merchant_id: string | null;
   transaction_date: string;
   description_raw: string;
   description_clean: string | null;
@@ -89,14 +90,19 @@ export type Transaction = {
   currency: string;
   direction: "income" | "expense" | "transfer";
   category_id: string | null;
+  is_subscription: boolean;
+  is_transfer: boolean;
   duplicate_key: string | null;
   created_at: string;
 };
 
 export type TransactionListItem = Transaction & {
   financial_accounts: Pick<FinancialAccount, "id" | "name"> | null;
-  transaction_categories: { name: string } | null;
+  transaction_categories: { id: string; name: string } | null;
+  merchants: { id: string; canonical_name: string; normalized_key: string } | null;
   import_batches: { id: string } | null;
+  merchant_display_name: string;
+  merchant_normalized_key: string;
 };
 
 export type TransactionCategory = {
@@ -110,6 +116,7 @@ export type TransactionFilters = {
   accountId?: string;
   direction?: string;
   categoryId?: string;
+  uncategorized?: boolean;
   dateFrom?: string;
   dateTo?: string;
 };

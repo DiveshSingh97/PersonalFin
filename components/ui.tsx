@@ -13,7 +13,8 @@ const statusStyles: Record<string, string> = {
   failed: "border-rose-200 bg-rose-50 text-rose-800",
   income: "border-emerald-200 bg-emerald-50 text-emerald-800",
   expense: "border-rose-200 bg-rose-50 text-rose-800",
-  transfer: "border-slate-200 bg-slate-100 text-slate-700"
+  transfer: "border-slate-200 bg-slate-100 text-slate-700",
+  subscription: "border-indigo-200 bg-indigo-50 text-indigo-800"
 };
 
 export function Card({
