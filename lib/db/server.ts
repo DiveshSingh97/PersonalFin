@@ -105,7 +105,10 @@ export async function loadTransactions(
     }
 
     if (filters.uncategorized) {
-      query = query.is("category_id", null);
+      const unknownCategoryId = await findUnknownCategoryId(admin, user.id);
+      query = unknownCategoryId
+        ? query.or(`category_id.is.null,category_id.eq.${unknownCategoryId}`)
+        : query.is("category_id", null);
     } else if (filters.categoryId) {
       query = query.eq("category_id", filters.categoryId);
     }
@@ -329,4 +332,24 @@ function normalizeTransactionListItem(row: Record<string, unknown>): Transaction
 
 function firstRelation(value: unknown): unknown {
   return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+async function findUnknownCategoryId(
+  admin: ReturnType<typeof createServiceRoleClient>,
+  userId: string
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("transaction_categories")
+    .select("id")
+    .eq("slug", "unknown")
+    .or(`user_id.is.null,user_id.eq.${userId}`)
+    .order("user_id", { ascending: true, nullsFirst: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data?.id ? String(data.id) : null;
 }

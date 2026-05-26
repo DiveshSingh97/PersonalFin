@@ -25,6 +25,7 @@ describe("normalizeMerchantDescription", () => {
 
   it("removes masked card suffixes while preserving merchant text", () => {
     expect(cleanMerchantDescription("PURCH SOME SHOP 400738******4647")).toBe("SOME SHOP");
+    expect(cleanMerchantDescription("PURCH SOME SHOP 400738 4647")).toBe("SOME SHOP");
   });
 });
 

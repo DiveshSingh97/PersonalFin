@@ -45,6 +45,7 @@ export function cleanMerchantDescription(description: string): string {
   let cleaned = description.trim();
 
   cleaned = cleaned.replace(/\b\d{4,6}\*{2,}\d{2,6}\b/g, " ");
+  cleaned = cleaned.replace(/\b\d{4,6}\s+\d{3,6}\b/g, " ");
   cleaned = cleaned.replace(/\bX{2,}\d{2,6}\b/gi, " ");
   cleaned = cleaned.replace(/\b(?:CARD|ACC(?:OUNT)?|A\/C)\s*\d{4,}\b/gi, " ");
   cleaned = cleaned.replace(/\b\d{10,}\b/g, " ");

@@ -29,6 +29,8 @@ type TransactionsPageProps = {
 export default async function TransactionsPage({ searchParams }: TransactionsPageProps) {
   const params = (await searchParams) ?? {};
   const filters = readFilters(params);
+  const feedback = readFeedback(params);
+  const returnTo = buildReturnTo(params);
   const pageData = await loadTransactionPageData(filters);
 
   return (
@@ -43,6 +45,18 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
         <SetupNotice message={pageData.message} />
       ) : (
         <div className="space-y-6">
+          {feedback ? (
+            <div
+              className={
+                feedback.type === "success"
+                  ? "rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900"
+                  : "rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-900"
+              }
+            >
+              {feedback.message}
+            </div>
+          ) : null}
+
           <Card className="p-5">
             <form className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
               <label className="block text-sm font-medium text-slate-700 xl:col-span-2">
@@ -123,6 +137,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
           <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
             <Card className="p-5">
               <form action={createTransactionRuleAction} className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                <input name="return_to" type="hidden" value={returnTo} />
                 <div className="md:col-span-2 xl:col-span-6">
                   <h2 className="text-base font-semibold text-ink">Create cleanup rule</h2>
                   <p className="mt-1 text-sm leading-6 text-slate-600">
@@ -186,6 +201,7 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
             </Card>
             <Card className="p-5">
               <form action={applyTransactionRulesAction} className="flex h-full flex-col justify-between gap-5">
+                <input name="return_to" type="hidden" value={returnTo} />
                 <div>
                   <h2 className="text-base font-semibold text-ink">Apply rules</h2>
                   <p className="mt-2 text-sm leading-6 text-slate-600">
@@ -202,15 +218,15 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
 
           <Card className="overflow-hidden">
             <div className="overflow-x-auto">
-              <div className="min-w-[1580px]">
-                <div className="grid grid-cols-[120px_150px_220px_320px_140px_110px_390px_110px] border-b border-line bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div className="min-w-[1540px]">
+                <div className="grid grid-cols-[112px_210px_360px_140px_120px_220px_210px_100px] border-b border-line bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <div className="px-4 py-3">Date</div>
-                  <div className="px-4 py-3">Account</div>
                   <div className="px-4 py-3">Merchant</div>
                   <div className="px-4 py-3">Description</div>
                   <div className="px-4 py-3 text-right">Amount</div>
                   <div className="px-4 py-3">Direction</div>
-                  <div className="px-4 py-3">Cleanup</div>
+                  <div className="px-4 py-3">Category</div>
+                  <div className="px-4 py-3">Actions</div>
                   <div className="px-4 py-3">Import</div>
                 </div>
                 {pageData.data.transactions.length === 0 ? (
@@ -227,9 +243,10 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                   pageData.data.transactions.map((transaction) => (
                     <form
                       action={updateTransactionCategoryAction}
-                      className="grid grid-cols-[120px_150px_220px_320px_140px_110px_390px_110px] border-b border-line text-sm last:border-b-0"
+                      className="grid grid-cols-[112px_210px_360px_140px_120px_220px_210px_100px] border-b border-line text-sm last:border-b-0"
                       key={transaction.id}
                     >
+                      <input name="return_to" type="hidden" value={returnTo} />
                       <input name="transaction_id" type="hidden" value={transaction.id} />
                       <input name="pattern" type="hidden" value={transaction.merchant_display_name} />
                       <input name="match_type" type="hidden" value="contains" />
@@ -237,20 +254,19 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                       <div className="px-4 py-3 text-slate-600">
                         {formatDate(transaction.transaction_date)}
                       </div>
-                      <div className="px-4 py-3 text-slate-600">
-                        {transaction.financial_accounts?.name || "Unknown"}
-                      </div>
                       <div className="px-4 py-3">
                         <div className="font-semibold text-ink">{transaction.merchant_display_name}</div>
-                        <div className="mt-1 text-xs text-slate-500">{transaction.merchant_normalized_key}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {transaction.financial_accounts?.name || "Unknown account"}
+                        </div>
                       </div>
-                      <div className="px-4 py-3 font-medium text-ink">
-                        <div>{transaction.description_clean || transaction.description_raw}</div>
-                        {transaction.description_clean && transaction.description_clean !== transaction.description_raw ? (
-                          <div className="mt-1 text-xs font-normal text-slate-500">
-                            Raw: {transaction.description_raw}
-                          </div>
-                        ) : null}
+                      <div className="px-4 py-3 font-medium text-ink" title={transaction.description_raw}>
+                        <div className="line-clamp-2">
+                          {transaction.description_clean || transaction.description_raw}
+                        </div>
+                        <div className="mt-1 text-xs font-normal text-slate-500">
+                          Key: {transaction.merchant_normalized_key}
+                        </div>
                       </div>
                       <div
                         className={
@@ -285,14 +301,28 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                             </option>
                           ))}
                         </select>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <button className={secondaryButtonClassName} formAction={updateTransactionCategoryAction}>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {transaction.transaction_categories?.name || "Uncategorized"}
+                        </p>
+                      </div>
+                      <div className="px-4 py-3">
+                        <div className="grid gap-2">
+                          <button
+                            className={`${secondaryButtonClassName} px-3 py-1.5 text-xs`}
+                            formAction={updateTransactionCategoryAction}
+                          >
                             Save
                           </button>
-                          <button className={secondaryButtonClassName} formAction={createTransactionRuleAction}>
+                          <button
+                            className={`${secondaryButtonClassName} px-3 py-1.5 text-xs`}
+                            formAction={createTransactionRuleAction}
+                          >
                             Create rule
                           </button>
-                          <button className={secondaryButtonClassName} formAction={applyTransactionRulesAction}>
+                          <button
+                            className={`${secondaryButtonClassName} px-3 py-1.5 text-xs`}
+                            formAction={applyTransactionRulesAction}
+                          >
                             Apply row
                           </button>
                         </div>
@@ -319,6 +349,40 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
       )}
     </PageShell>
   );
+}
+
+function buildReturnTo(params: Record<string, string | string[] | undefined>): string {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (key === "notice" || key === "message") {
+      return;
+    }
+
+    const firstValue = firstParam(value);
+    if (firstValue) {
+      query.set(key, firstValue);
+    }
+  });
+
+  const serialized = query.toString();
+  return serialized ? `/transactions?${serialized}` : "/transactions";
+}
+
+function readFeedback(
+  params: Record<string, string | string[] | undefined>
+): { type: "success" | "error"; message: string } | null {
+  const notice = firstParam(params.notice);
+  const message = firstParam(params.message);
+
+  if ((notice !== "success" && notice !== "error") || !message) {
+    return null;
+  }
+
+  return {
+    type: notice,
+    message
+  };
 }
 
 function readFilters(params: Record<string, string | string[] | undefined>): TransactionFilters {

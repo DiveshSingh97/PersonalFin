@@ -23,6 +23,19 @@ describe("doesRuleMatchTransaction", () => {
     ).toBe(true);
   });
 
+  it("matches Woolworths against cleaned parser descriptions", () => {
+    expect(
+      doesRuleMatchTransaction(
+        { ...baseRule, pattern: "Woolworths", category_id: "groceries" },
+        {
+          description_raw: "PURCH WOOLWORTHS 400738******4647",
+          description_clean: "purch woolworths 400738 4647",
+          direction: "expense"
+        }
+      )
+    ).toBe(true);
+  });
+
   it("respects direction constraints", () => {
     expect(
       doesRuleMatchTransaction(
