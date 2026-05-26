@@ -51,19 +51,21 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 />
               </label>
               <label className="block text-sm font-medium text-slate-700">
-                Account
+                View
                 <select
                   className={fieldClassName}
-                  defaultValue={pageData.data.filters.accountId}
-                  name="account"
+                  defaultValue={pageData.data.filters.scopeId}
+                  name="scope"
                 >
-                  <option value="">All active accounts</option>
-                  {pageData.data.accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
+                  {pageData.data.scopes.map((scope) => (
+                    <option key={scope.id} value={scope.id}>
+                      {scope.label}
                     </option>
                   ))}
                 </select>
+                <span className="mt-1 block text-xs font-normal text-slate-500">
+                  {pageData.data.selectedScope.description}
+                </span>
               </label>
               <div className="flex items-end gap-2">
                 <button className={primaryButtonClassName}>
@@ -425,7 +427,7 @@ function TableHeader({ columns, className }: { columns: string[]; className: str
 function readFilters(params: Record<string, string | string[] | undefined>): DashboardFilters {
   return {
     month: firstParam(params.month),
-    accountId: firstParam(params.account)
+    scopeId: firstParam(params.scope)
   };
 }
 

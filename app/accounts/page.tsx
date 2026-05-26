@@ -9,6 +9,7 @@ import {
 } from "@/components/ui";
 import { createAccountAction } from "@/lib/imports/actions";
 import { loadAccounts } from "@/lib/db/server";
+import type { FinancialAccount } from "@/lib/db/types";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,18 @@ const accountTypes = [
   ["credit_card", "Credit card"],
   ["investment", "Investment"],
   ["crypto", "Crypto"],
+  ["debt", "Debt"],
+  ["manual", "Manual"]
+] as const;
+
+const accountRoles = [
+  ["primary_bank_account", "Primary bank account"],
+  ["secondary_bank_account", "Secondary bank account"],
+  ["credit_card", "Credit card"],
+  ["savings", "Savings"],
+  ["investment", "Investment"],
+  ["crypto", "Crypto"],
+  ["retirement", "Retirement"],
   ["debt", "Debt"],
   ["manual", "Manual"]
 ] as const;
@@ -35,10 +48,13 @@ export default async function AccountsPage() {
       ) : pageData.status === "setup_error" ? (
         <SetupNotice message={pageData.message} />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
+        <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
           <Card className="p-5">
             <form action={createAccountAction}>
               <h2 className="text-base font-semibold text-ink">Create account</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                Set provider and role details so dashboards can switch between total, provider, bank, card, and account views.
+              </p>
               <div className="mt-5 space-y-4">
                 <label className="block text-sm font-medium text-slate-700">
                   Name
@@ -56,6 +72,29 @@ export default async function AccountsPage() {
                     name="provider_name"
                     placeholder="Bank or platform"
                   />
+                </label>
+                <label className="block text-sm font-medium text-slate-700">
+                  Role
+                  <select className={fieldClassName} name="account_role" defaultValue="primary_bank_account">
+                    {accountRoles.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm font-medium text-slate-700">
+                  Parent account
+                  <select className={fieldClassName} name="parent_account_id">
+                    <option value="">None</option>
+                    {pageData.data
+                      .filter((account) => account.account_type !== "credit_card")
+                      .map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.name}
+                        </option>
+                      ))}
+                  </select>
                 </label>
                 <label className="block text-sm font-medium text-slate-700">
                   Account type
@@ -82,6 +121,24 @@ export default async function AccountsPage() {
                     required
                   />
                 </label>
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                  <input
+                    className="h-4 w-4 rounded border-line text-cyan-800 focus:ring-cyan-700"
+                    defaultChecked
+                    name="include_in_cash_flow"
+                    type="checkbox"
+                  />
+                  Include in cash flow
+                </label>
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                  <input
+                    className="h-4 w-4 rounded border-line text-cyan-800 focus:ring-cyan-700"
+                    defaultChecked
+                    name="include_in_net_worth"
+                    type="checkbox"
+                  />
+                  Include in net worth
+                </label>
                 <button className={`${primaryButtonClassName} w-full`}>
                   Create account
                 </button>
@@ -91,11 +148,13 @@ export default async function AccountsPage() {
 
           <Card className="overflow-hidden">
             <section className="overflow-x-auto">
-              <div className="min-w-[720px]">
-                <div className="grid grid-cols-[1.4fr_1fr_1fr_0.7fr_0.7fr] border-b border-line bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div className="min-w-[1040px]">
+                <div className="grid grid-cols-[1.3fr_1fr_1fr_1fr_1fr_0.8fr_0.7fr] border-b border-line bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <div className="px-4 py-3">Account</div>
                   <div className="px-4 py-3">Provider</div>
                   <div className="px-4 py-3">Type</div>
+                  <div className="px-4 py-3">Role</div>
+                  <div className="px-4 py-3">Parent</div>
                   <div className="px-4 py-3">Currency</div>
                   <div className="px-4 py-3">Status</div>
                 </div>
@@ -107,7 +166,7 @@ export default async function AccountsPage() {
                 ) : (
                   pageData.data.map((account) => (
                     <div
-                      className="grid grid-cols-[1.4fr_1fr_1fr_0.7fr_0.7fr] border-b border-line text-sm last:border-b-0"
+                      className="grid grid-cols-[1.3fr_1fr_1fr_1fr_1fr_0.8fr_0.7fr] border-b border-line text-sm last:border-b-0"
                       key={account.id}
                     >
                       <div className="px-4 py-3 font-medium text-ink">{account.name}</div>
@@ -116,6 +175,12 @@ export default async function AccountsPage() {
                       </div>
                       <div className="px-4 py-3 text-slate-600">
                         {account.account_type.replace("_", " ")}
+                      </div>
+                      <div className="px-4 py-3 text-slate-600">
+                        {(account.account_role || "Unspecified").replaceAll("_", " ")}
+                      </div>
+                      <div className="px-4 py-3 text-slate-600">
+                        {parentAccountName(pageData.data, account.parent_account_id)}
                       </div>
                       <div className="px-4 py-3 text-slate-600">{account.currency}</div>
                       <div className="px-4 py-3">
@@ -133,4 +198,12 @@ export default async function AccountsPage() {
       )}
     </PageShell>
   );
+}
+
+function parentAccountName(accounts: FinancialAccount[], parentAccountId: string | null) {
+  if (!parentAccountId) {
+    return "None";
+  }
+
+  return accounts.find((account) => account.id === parentAccountId)?.name ?? "Unknown";
 }

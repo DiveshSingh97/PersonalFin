@@ -12,8 +12,13 @@ import type {
   TransactionListItem,
   UploadedFile
 } from "@/lib/db/types";
+import type { FinancialScopeOption } from "@/lib/db/types";
 import { calculateStagedStatusCounts } from "@/lib/imports/review";
 import { normalizeMerchantDescription } from "@/lib/transactions/merchant-normalization";
+import { buildFinancialScopes, resolveFinancialScope } from "@/lib/accounts/scopes";
+
+const accountSelect =
+  "id,user_id,name,institution_name,account_type,account_role,parent_account_id,include_in_cash_flow,include_in_net_worth,currency,is_active,created_at";
 
 export async function getCurrentUser(): Promise<User | null> {
   const supabase = await createClient();
@@ -44,7 +49,7 @@ export async function loadAccounts(): Promise<PageData<FinancialAccount[]>> {
     const admin = createServiceRoleClient();
     const { data, error } = await admin
       .from("financial_accounts")
-      .select("id,user_id,name,institution_name,account_type,currency,is_active,created_at")
+      .select(accountSelect)
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
@@ -96,8 +101,16 @@ export async function loadTransactions(
       );
     }
 
+    const accounts = await loadAccountsForUser(admin, user.id);
+    const selectedScope = resolveFinancialScope(accounts, filters.scopeId);
+
     if (filters.accountId) {
       query = query.eq("account_id", filters.accountId);
+    } else if (filters.scopeId && selectedScope.id !== "total") {
+      if (selectedScope.accountIds.length === 0) {
+        return [];
+      }
+      query = query.in("account_id", selectedScope.accountIds);
     }
 
     if (filters.direction) {
@@ -141,6 +154,7 @@ export async function loadTransactionPageData(
     accounts: FinancialAccount[];
     categories: TransactionCategory[];
     filters: TransactionFilters;
+    scopes: FinancialScopeOption[];
   }>
 > {
   return withPageData(async (user) => {
@@ -149,7 +163,7 @@ export async function loadTransactionPageData(
       loadTransactions(filters),
       admin
         .from("financial_accounts")
-        .select("id,user_id,name,institution_name,account_type,currency,is_active,created_at")
+        .select(accountSelect)
         .eq("user_id", user.id)
         .order("name", { ascending: true }),
       admin
@@ -171,11 +185,14 @@ export async function loadTransactionPageData(
       throw categoriesResult.error;
     }
 
+    const accounts = (accountsResult.data ?? []) as FinancialAccount[];
+
     return {
       transactions: transactions.data,
-      accounts: (accountsResult.data ?? []) as FinancialAccount[],
+      accounts,
       categories: (categoriesResult.data ?? []) as TransactionCategory[],
-      filters
+      filters,
+      scopes: buildFinancialScopes(accounts)
     };
   });
 }
@@ -237,7 +254,7 @@ export async function loadImportReview(
         typedBatch.account_id
           ? admin
               .from("financial_accounts")
-              .select("id,user_id,name,institution_name,account_type,currency,is_active,created_at")
+              .select(accountSelect)
               .eq("id", typedBatch.account_id)
               .eq("user_id", user.id)
               .maybeSingle()
@@ -352,4 +369,21 @@ async function findUnknownCategoryId(
   }
 
   return data?.id ? String(data.id) : null;
+}
+
+async function loadAccountsForUser(
+  admin: ReturnType<typeof createServiceRoleClient>,
+  userId: string
+): Promise<FinancialAccount[]> {
+  const { data, error } = await admin
+    .from("financial_accounts")
+    .select(accountSelect)
+    .eq("user_id", userId)
+    .order("name", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as FinancialAccount[];
 }

@@ -4,6 +4,20 @@ export type FinancialAccount = {
   name: string;
   institution_name: string | null;
   account_type: "bank" | "credit_card" | "investment" | "crypto" | "debt" | "manual";
+  account_role:
+    | "primary_bank_account"
+    | "secondary_bank_account"
+    | "credit_card"
+    | "savings"
+    | "investment"
+    | "crypto"
+    | "retirement"
+    | "debt"
+    | "manual"
+    | null;
+  parent_account_id: string | null;
+  include_in_cash_flow: boolean;
+  include_in_net_worth: boolean;
   currency: string;
   is_active: boolean;
   created_at: string;
@@ -119,6 +133,14 @@ export type TransactionFilters = {
   uncategorized?: boolean;
   dateFrom?: string;
   dateTo?: string;
+  scopeId?: string;
+};
+
+export type FinancialScopeOption = {
+  id: string;
+  label: string;
+  description: string;
+  accountIds: string[];
 };
 
 export type PageData<T> =

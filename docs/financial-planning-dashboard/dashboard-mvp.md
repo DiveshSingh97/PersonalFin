@@ -14,7 +14,7 @@ It is intentionally deterministic and read-only. It does not use AI, forecasts, 
 
 - Include only `transactions` where `deleted_at is null`.
 - Exclude staged, uncommitted, duplicate, skipped, invalid, and undone import rows.
-- Filter by selected month and optional account.
+- Filter by selected month and financial scope.
 - Default to the current month when current-month transactions exist.
 - If the current month has no transactions, default to the most recent transaction month.
 - Treat `Unknown` and empty category values as uncategorized for dashboard cleanup counts.
@@ -29,6 +29,7 @@ The first dashboard includes:
 - Top merchants by expense amount, using normalized merchant names where available.
 - Recent active transactions for quick inspection.
 - Import and data-health summary with latest import batches and cleanup links.
+- A financial view selector for total, provider, account type, or specific account scopes.
 
 ## Limitations
 

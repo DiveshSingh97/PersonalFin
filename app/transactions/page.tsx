@@ -68,6 +68,16 @@ export default async function TransactionsPage({ searchParams }: TransactionsPag
                   placeholder="Netflix, salary, transfer"
                 />
               </label>
+              <label className="block text-sm font-medium text-slate-700 xl:col-span-2">
+                View
+                <select className={fieldClassName} defaultValue={filters.scopeId ?? "total"} name="scope">
+                  {pageData.data.scopes.map((scope) => (
+                    <option key={scope.id} value={scope.id}>
+                      {scope.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="block text-sm font-medium text-slate-700">
                 Account
                 <select className={fieldClassName} defaultValue={filters.accountId ?? ""} name="account">
@@ -393,7 +403,8 @@ function readFilters(params: Record<string, string | string[] | undefined>): Tra
     categoryId: firstParam(params.category),
     uncategorized: firstParam(params.uncategorized) === "1",
     dateFrom: firstParam(params.from),
-    dateTo: firstParam(params.to)
+    dateTo: firstParam(params.to),
+    scopeId: firstParam(params.scope)
   };
 }
 
