@@ -78,6 +78,13 @@ function ReviewContent({ data }: { data: ReviewData }) {
   const isLocked = data.batch.status === "committed" || data.batch.status === "undone";
   const warnBeforeConfirm =
     data.counts.invalid + data.counts.duplicate + data.counts.skipped + data.counts.needs_review > 0;
+  const showPostedDate =
+    Boolean(mappingValue(data.batch.mapping_json, "postedDate")) ||
+    data.stagedTransactions.some((row) => Boolean(row.posted_date));
+  const stagedGridColumns = showPostedDate
+    ? "grid-cols-[48px_72px_150px_150px_360px_150px_120px_150px_150px_320px]"
+    : "grid-cols-[48px_72px_150px_430px_150px_120px_150px_150px_320px]";
+  const stagedTableWidth = showPostedDate ? "min-w-[1650px]" : "min-w-[1500px]";
 
   return (
     <div className="space-y-6">
@@ -221,19 +228,23 @@ function ReviewContent({ data }: { data: ReviewData }) {
             </form>
           </div>
         </div>
-        <div className="overflow-x-auto">
-          <div className="min-w-[1320px]">
-            <div className="grid grid-cols-[44px_70px_150px_140px_280px_120px_110px_130px_130px_220px] border-b border-line bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <div className="overflow-x-auto overscroll-x-contain [scrollbar-gutter:stable]">
+          <div className={stagedTableWidth}>
+            <div
+              className={`grid ${stagedGridColumns} border-b border-line bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500`}
+            >
               <div className="px-3 py-3">Pick</div>
               <div className="px-3 py-3">Row</div>
               <div className="px-3 py-3">Date</div>
-              <div className="px-3 py-3">Posted</div>
+              {showPostedDate ? <div className="px-3 py-3">Posted</div> : null}
               <div className="px-3 py-3">Description</div>
               <div className="px-3 py-3">Amount</div>
               <div className="px-3 py-3">Currency</div>
               <div className="px-3 py-3">Direction</div>
               <div className="px-3 py-3">Status</div>
-              <div className="px-3 py-3">Issue</div>
+              <div className="sticky right-0 z-10 border-l border-line bg-slate-50 px-3 py-3">
+                Issue / action
+              </div>
             </div>
             {data.stagedTransactions.length === 0 ? (
               <EmptyState
@@ -247,7 +258,7 @@ function ReviewContent({ data }: { data: ReviewData }) {
                 return (
                   <form
                     action={updateStagedRowAction}
-                    className="grid grid-cols-[44px_70px_150px_140px_280px_120px_110px_130px_130px_220px] items-start border-b border-line text-sm last:border-b-0"
+                    className={`grid ${stagedGridColumns} items-start border-b border-line text-sm last:border-b-0`}
                     id={formId}
                     key={row.id}
                   >
@@ -267,21 +278,23 @@ function ReviewContent({ data }: { data: ReviewData }) {
                     <div className="px-3 py-2">
                       <input
                         className={fieldClassName}
-                        defaultValue={row.transaction_date || ""}
+                        defaultValue={dateInputValue(row.transaction_date)}
                         disabled={isLocked}
                         name="transaction_date"
                         type="date"
                       />
                     </div>
-                    <div className="px-3 py-2">
-                      <input
-                        className={fieldClassName}
-                        defaultValue={row.posted_date || ""}
-                        disabled={isLocked}
-                        name="posted_date"
-                        type="date"
-                      />
-                    </div>
+                    {showPostedDate ? (
+                      <div className="px-3 py-2">
+                        <input
+                          className={fieldClassName}
+                          defaultValue={dateInputValue(row.posted_date)}
+                          disabled={isLocked || !mappingValue(data.batch.mapping_json, "postedDate")}
+                          name="posted_date"
+                          type="date"
+                        />
+                      </div>
+                    ) : null}
                     <div className="px-3 py-2">
                       <input
                         className={fieldClassName}
@@ -291,17 +304,18 @@ function ReviewContent({ data }: { data: ReviewData }) {
                       />
                     </div>
                     <div className="px-3 py-2">
+                      {showPostedDate ? null : <input name="posted_date" type="hidden" value="" />}
                       <input
                         className={fieldClassName}
-                        defaultValue={row.amount ?? ""}
+                        defaultValue={numberInputValue(row.amount)}
                         disabled={isLocked}
                         name="amount"
                         step="0.01"
                         type="number"
                       />
-                      {row.amount !== null && row.currency ? (
+                      {numberValue(row.amount) !== null && row.currency ? (
                         <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {formatMoney(row.amount, row.currency)}
+                          {formatMoney(numberValue(row.amount) ?? 0, row.currency)}
                         </p>
                       ) : null}
                     </div>
@@ -344,14 +358,14 @@ function ReviewContent({ data }: { data: ReviewData }) {
                         <StatusBadge status={row.status} />
                       </div>
                     </div>
-                    <div className="px-3 py-2">
+                    <div className="sticky right-0 border-l border-line bg-white px-3 py-2 shadow-[-8px_0_12px_rgba(15,23,42,0.06)]">
                       <p className="min-h-6 text-xs leading-5 text-slate-600">
                         {row.error_message ||
                           (row.duplicate_candidate_transaction_id
                             ? `Duplicate ${row.duplicate_candidate_transaction_id.slice(0, 8)}`
                             : "No issue")}
                       </p>
-                      <button className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-cyan-800 hover:text-cyan-950" disabled={isLocked || row.status === "committed"}>
+                      <button className="mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 hover:text-cyan-950 disabled:cursor-not-allowed disabled:text-slate-400" disabled={isLocked || row.status === "committed"}>
                         <Save className="h-3.5 w-3.5" aria-hidden="true" />
                         Save row
                       </button>
@@ -388,4 +402,49 @@ function InfoTerm({ label, value, wide }: { label: string; value: string; wide?:
 function mappingValue(mapping: Record<string, unknown>, key: string) {
   const value = mapping[key];
   return typeof value === "string" ? value : "";
+}
+
+function dateInputValue(value: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  const isoDate = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(trimmed);
+  if (isoDate) {
+    return `${isoDate[1]}-${isoDate[2].padStart(2, "0")}-${isoDate[3].padStart(2, "0")}`;
+  }
+
+  const yearFirstSlash = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(trimmed);
+  if (yearFirstSlash) {
+    return `${yearFirstSlash[1]}-${yearFirstSlash[2].padStart(2, "0")}-${yearFirstSlash[3].padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+
+  return `${parsed.getUTCFullYear().toString().padStart(4, "0")}-${(parsed.getUTCMonth() + 1)
+    .toString()
+    .padStart(2, "0")}-${parsed.getUTCDate().toString().padStart(2, "0")}`;
+}
+
+function numberInputValue(value: number | string | null) {
+  const parsed = numberValue(value);
+  return parsed === null ? "" : parsed.toFixed(2);
+}
+
+function numberValue(value: number | string | null) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s/g, "").replace(",", ".");
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
