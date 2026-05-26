@@ -16,13 +16,28 @@ import {
 } from "@/lib/imports/review";
 
 const accountTypes = new Set(["bank", "credit_card", "investment", "crypto", "debt", "manual"]);
+const accountRoles = new Set([
+  "primary_bank_account",
+  "secondary_bank_account",
+  "credit_card",
+  "savings",
+  "investment",
+  "crypto",
+  "retirement",
+  "debt",
+  "manual"
+]);
 
 export async function createAccountAction(formData: FormData) {
   const user = await requireCurrentUser();
   const name = getTextField(formData, "name");
   const providerName = getTextField(formData, "provider_name");
   const accountType = getTextField(formData, "account_type") || "bank";
+  const accountRole = normalizeAccountRole(getTextField(formData, "account_role"), accountType);
+  const parentAccountId = getTextField(formData, "parent_account_id");
   const currency = (getTextField(formData, "currency") || "ZAR").toUpperCase();
+  const includeInCashFlow = formData.get("include_in_cash_flow") !== null;
+  const includeInNetWorth = formData.get("include_in_net_worth") !== null;
 
   if (!name) {
     throw new Error("Account name is required.");
@@ -37,11 +52,32 @@ export async function createAccountAction(formData: FormData) {
   }
 
   const admin = createServiceRoleClient();
+  if (parentAccountId) {
+    const { data: parentAccount, error: parentError } = await admin
+      .from("financial_accounts")
+      .select("id")
+      .eq("id", parentAccountId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (parentError) {
+      throw parentError;
+    }
+
+    if (!parentAccount) {
+      throw new Error("Choose a valid parent account.");
+    }
+  }
+
   const { error } = await admin.from("financial_accounts").insert({
     user_id: user.id,
     name,
     institution_name: providerName || null,
     account_type: accountType,
+    account_role: accountRole,
+    parent_account_id: parentAccountId || null,
+    include_in_cash_flow: includeInCashFlow,
+    include_in_net_worth: includeInNetWorth,
     currency
   });
 
@@ -51,6 +87,24 @@ export async function createAccountAction(formData: FormData) {
 
   revalidatePath("/accounts");
   revalidatePath("/uploads");
+  revalidatePath("/dashboard");
+  revalidatePath("/transactions");
+}
+
+function normalizeAccountRole(role: string | null, accountType: string): string {
+  if (role && accountRoles.has(role)) {
+    return role;
+  }
+
+  if (accountType === "credit_card") {
+    return "credit_card";
+  }
+
+  if (accountRoles.has(accountType)) {
+    return accountType;
+  }
+
+  return "primary_bank_account";
 }
 
 export async function uploadImportAction(formData: FormData) {

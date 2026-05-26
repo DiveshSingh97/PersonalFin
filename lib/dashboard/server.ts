@@ -4,6 +4,11 @@ import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import type { FinancialAccount, ImportBatchListItem, PageData } from "@/lib/db/types";
 import { normalizeMerchantDescription } from "@/lib/transactions/merchant-normalization";
 import {
+  buildFinancialScopes,
+  resolveFinancialScope,
+  type FinancialScope
+} from "@/lib/accounts/scopes";
+import {
   calculateDashboardSummary,
   getMonthRange,
   groupMonthlyCashFlow,
@@ -16,7 +21,7 @@ import {
 
 export type DashboardFilters = {
   month?: string;
-  accountId?: string;
+  scopeId?: string;
 };
 
 export type DashboardData = {
@@ -27,6 +32,8 @@ export type DashboardData = {
   };
   currency: string;
   accounts: FinancialAccount[];
+  scopes: FinancialScope[];
+  selectedScope: FinancialScope;
   summary: ReturnType<typeof calculateDashboardSummary>;
   monthlyCashFlow: ReturnType<typeof groupMonthlyCashFlow>;
   spendingByCategory: ReturnType<typeof groupSpendingByCategory>;
@@ -38,6 +45,8 @@ export type DashboardData = {
 
 const transactionSelect =
   "id,user_id,account_id,import_batch_id,merchant_id,transaction_date,description_raw,description_clean,amount,currency,direction,category_id,is_subscription,is_transfer,duplicate_key,created_at,financial_accounts(id,name),transaction_categories(id,name),merchants(id,canonical_name,normalized_key),import_batches(id)";
+const accountSelect =
+  "id,user_id,name,institution_name,account_type,account_role,parent_account_id,include_in_cash_flow,include_in_net_worth,currency,is_active,created_at";
 
 export async function loadDashboardPageData(
   filters: DashboardFilters
@@ -46,7 +55,7 @@ export async function loadDashboardPageData(
     const admin = createServiceRoleClient();
     const { data: accountsData, error: accountsError } = await admin
       .from("financial_accounts")
-      .select("id,user_id,name,institution_name,account_type,currency,is_active,created_at")
+      .select(accountSelect)
       .eq("user_id", user.id)
       .eq("is_active", true)
       .order("name", { ascending: true });
@@ -56,12 +65,12 @@ export async function loadDashboardPageData(
     }
 
     const accounts = (accountsData ?? []) as FinancialAccount[];
-    const accountId = accounts.some((account) => account.id === filters.accountId)
-      ? filters.accountId
-      : "";
+    const scopes = buildFinancialScopes(accounts);
+    const selectedScope = resolveFinancialScope(accounts, filters.scopeId);
+    const scopedAccountIds = selectedScope.accountIds;
     const month = isMonthValue(filters.month)
       ? filters.month
-      : await determineDefaultMonth(user.id, accountId || null);
+      : await determineDefaultMonth(user.id, scopedAccountIds);
     const dateRange = getMonthRange(month);
     const cashFlowStart = getMonthRange(shiftMonth(month, -11)).start;
 
@@ -74,21 +83,21 @@ export async function loadDashboardPageData(
     ] = await Promise.all([
       loadTransactionsForDashboard({
         userId: user.id,
-        accountId: accountId || null,
+        accountIds: scopedAccountIds,
         start: dateRange.start,
         endExclusive: dateRange.endExclusive,
         limit: 5000
       }),
       loadTransactionsForDashboard({
         userId: user.id,
-        accountId: accountId || null,
+        accountIds: scopedAccountIds,
         start: cashFlowStart,
         endExclusive: dateRange.endExclusive,
         limit: 5000
       }),
       loadTransactionsForDashboard({
         userId: user.id,
-        accountId: accountId || null,
+        accountIds: scopedAccountIds,
         limit: 8
       }),
       admin
@@ -116,11 +125,13 @@ export async function loadDashboardPageData(
     return {
       filters: {
         month,
-        accountId: accountId ?? ""
+        scopeId: selectedScope.id
       },
       dateRange,
       currency,
       accounts,
+      scopes,
+      selectedScope,
       summary: calculateDashboardSummary(
         selectedTransactions,
         accounts.filter((account) => account.is_active).length
@@ -139,7 +150,7 @@ export async function loadDashboardPageData(
 
 async function loadTransactionsForDashboard(input: {
   userId: string;
-  accountId: string | null;
+  accountIds: string[];
   start?: string;
   endExclusive?: string;
   limit: number;
@@ -153,8 +164,14 @@ async function loadTransactionsForDashboard(input: {
     .order("transaction_date", { ascending: false })
     .limit(input.limit);
 
-  if (input.accountId) {
-    query = query.eq("account_id", input.accountId);
+  if (input.accountIds.length === 0) {
+    return [];
+  }
+
+  if (input.accountIds.length === 1) {
+    query = query.eq("account_id", input.accountIds[0]);
+  } else {
+    query = query.in("account_id", input.accountIds);
   }
 
   if (input.start) {
@@ -174,7 +191,7 @@ async function loadTransactionsForDashboard(input: {
   return (data ?? []).map((row) => normalizeDashboardTransaction(row as Record<string, unknown>));
 }
 
-async function determineDefaultMonth(userId: string, accountId: string | null): Promise<string> {
+async function determineDefaultMonth(userId: string, accountIds: string[]): Promise<string> {
   const currentMonth = new Date().toISOString().slice(0, 7);
   const currentRange = getMonthRange(currentMonth);
   const admin = createServiceRoleClient();
@@ -187,8 +204,14 @@ async function determineDefaultMonth(userId: string, accountId: string | null): 
     .lt("transaction_date", currentRange.endExclusive)
     .limit(1);
 
-  if (accountId) {
-    currentQuery = currentQuery.eq("account_id", accountId);
+  if (accountIds.length === 0) {
+    return currentMonth;
+  }
+
+  if (accountIds.length === 1) {
+    currentQuery = currentQuery.eq("account_id", accountIds[0]);
+  } else {
+    currentQuery = currentQuery.in("account_id", accountIds);
   }
 
   const { data: currentData, error: currentError } = await currentQuery;
@@ -209,8 +232,10 @@ async function determineDefaultMonth(userId: string, accountId: string | null): 
     .order("transaction_date", { ascending: false })
     .limit(1);
 
-  if (accountId) {
-    latestQuery = latestQuery.eq("account_id", accountId);
+  if (accountIds.length === 1) {
+    latestQuery = latestQuery.eq("account_id", accountIds[0]);
+  } else {
+    latestQuery = latestQuery.in("account_id", accountIds);
   }
 
   const { data: latestData, error: latestError } = await latestQuery;
