@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/db/server";
-import { createServiceRoleClient } from "@/lib/supabase/server";
+import { createClient, createServiceRoleClient } from "@/lib/supabase/server";
 import { getServerEnv } from "@/lib/env";
 import { type ImportColumnMapping, parseImportFile } from "@/lib/imports/parser";
 import {
@@ -228,162 +228,21 @@ export async function uploadImportAction(formData: FormData) {
 }
 
 export async function confirmImportAction(formData: FormData) {
-  const user = await requireCurrentUser();
+  await requireCurrentUser();
   const batchId = getTextField(formData, "batch_id");
 
   if (!batchId) {
     throw new Error("Import batch is required.");
   }
 
-  const admin = createServiceRoleClient();
-  const { data: batch, error: batchError } = await admin
-    .from("import_batches")
-    .select("id,user_id,uploaded_file_id,status")
-    .eq("id", batchId)
-    .eq("user_id", user.id)
-    .single();
-
-  if (batchError) {
-    throw batchError;
-  }
-
-  if (batch.status === "committed") {
-    redirect(`/imports/${batchId}/review`);
-  }
-
-  if (batch.status === "undone") {
-    redirect(`/imports/${batchId}/review`);
-  }
-
-  await admin
-    .from("import_batches")
-    .update({ status: "committing" })
-    .eq("id", batchId)
-    .eq("user_id", user.id);
-
-  const { data: stagedRows, error: stagedError } = await admin
-    .from("staged_transactions")
-    .select(
-      "id,user_id,account_id,import_batch_id,transaction_date,posted_date,description_raw,description_clean,amount,currency,direction,category_id,duplicate_key"
-    )
-    .eq("import_batch_id", batchId)
-    .eq("user_id", user.id)
-    .eq("status", "approved")
-    .order("row_number", { ascending: true });
-
-  if (stagedError) {
-    throw stagedError;
-  }
-
-  const { data: alreadyCommitted, error: committedLookupError } = await admin
-    .from("transactions")
-    .select("staged_transaction_id")
-    .eq("import_batch_id", batchId)
-    .eq("user_id", user.id)
-    .is("deleted_at", null);
-
-  if (committedLookupError) {
-    throw committedLookupError;
-  }
-
-  const alreadyCommittedStagedIds = new Set(
-    (alreadyCommitted ?? [])
-      .map((row) => row.staged_transaction_id)
-      .filter((id): id is string => Boolean(id))
-  );
-
-  const approvedRows = (stagedRows ?? []).filter(
-    (row) =>
-      row.account_id &&
-      row.transaction_date &&
-      row.description_raw &&
-      row.amount !== null &&
-      row.direction &&
-      !alreadyCommittedStagedIds.has(row.id)
-  );
-
-  const existingDuplicateKeys = await findExistingDuplicateCandidates({
-    userId: user.id,
-    accountId: null,
-    duplicateKeys: approvedRows
-      .map((row) => row.duplicate_key)
-      .filter((key): key is string => Boolean(key))
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("confirm_import_batch", {
+    p_import_batch_id: batchId
   });
 
-  const rowsToCommit = approvedRows.filter(
-    (row) => !row.duplicate_key || !existingDuplicateKeys.has(row.duplicate_key)
-  );
-
-  const inserted =
-    rowsToCommit.length > 0
-      ? await admin
-          .from("transactions")
-          .insert(
-            rowsToCommit.map((row) => ({
-              user_id: user.id,
-              account_id: row.account_id,
-              import_batch_id: batchId,
-              staged_transaction_id: row.id,
-              transaction_date: row.transaction_date,
-              posted_date: row.posted_date,
-              description_raw: row.description_raw,
-              description_clean: row.description_clean,
-              amount: row.amount,
-              currency: row.currency ?? "ZAR",
-              direction: row.direction,
-              category_id: row.category_id,
-              duplicate_key: row.duplicate_key,
-              user_verified: true
-            }))
-          )
-          .select("id,staged_transaction_id")
-      : { data: [], error: null };
-
-  if (inserted.error) {
-    await admin
-      .from("import_batches")
-      .update({ status: "failed", error_message: inserted.error.message })
-      .eq("id", batchId)
-      .eq("user_id", user.id);
-    throw inserted.error;
+  if (error) {
+    throw error;
   }
-
-  const committedRows = inserted.data ?? [];
-
-  await Promise.all(
-    committedRows.map((transaction) =>
-      admin
-        .from("staged_transactions")
-        .update({
-          status: "committed",
-          committed_transaction_id: transaction.id,
-          reviewed_at: new Date().toISOString()
-        })
-        .eq("id", transaction.staged_transaction_id)
-        .eq("user_id", user.id)
-    )
-  );
-
-  await Promise.all([
-    admin
-      .from("import_batches")
-      .update({
-        status: "committed",
-        committed_rows: committedRows.length,
-        skipped_rows: approvedRows.length - committedRows.length,
-        committed_at: new Date().toISOString(),
-        error_message: null
-      })
-      .eq("id", batchId)
-      .eq("user_id", user.id),
-    batch.uploaded_file_id
-      ? admin
-          .from("uploaded_files")
-          .update({ status: "committed" })
-          .eq("id", batch.uploaded_file_id)
-          .eq("user_id", user.id)
-      : Promise.resolve()
-  ]);
 
   revalidatePath("/imports");
   revalidatePath(`/imports/${batchId}/review`);
