@@ -284,3 +284,39 @@ The ingestion MVP schema is acceptable when:
 - Undo can be implemented by soft-deleting transactions for an import batch.
 - Reprocessing can be represented without overwriting original batch history.
 - Placeholder app pages still build without upload UI, parsing, database access code, or AI features.
+
+## 16. Transaction Cleanup Rules
+
+After import confirmation, raw transaction descriptions should be transformed into cleaner financial data without losing auditability.
+
+Merchant normalization is deterministic in the MVP:
+
+- Raw descriptions remain stored in `transactions.description_raw`.
+- Cleaned descriptions may be shown beside raw descriptions for review.
+- Obvious bank export prefixes, masked card suffixes, and repeated card/account tokens can be removed for display.
+- Known merchant patterns can produce a canonical display name and normalized merchant key.
+- The normalized merchant key should be stable enough to reuse across imports, rules, and future dashboards.
+- No AI or external merchant API is used for merchant normalization in this stage.
+
+Category editing is user-controlled:
+
+- Users can assign an existing global or user-owned category to an active transaction.
+- Users can clear a category to leave a transaction uncategorized.
+- Category edits must only affect the signed-in user's transactions.
+- Deleted transactions where `deleted_at is not null` must not be mutated by cleanup actions.
+
+Transaction rules are reusable deterministic cleanup instructions:
+
+- Rules belong to one user.
+- Initial rule matching supports simple `contains` and `exact` patterns.
+- A rule may optionally be scoped to a transaction direction.
+- A rule may set `category_id`, `is_subscription`, and `is_transfer`.
+- Active rules are evaluated by ascending priority, then creation order.
+- Rule application should be available for one transaction and for all active uncategorized transactions.
+- Rule application must not directly create new financial transactions.
+
+Limitations:
+
+- Deterministic matching will miss ambiguous merchants and unusual bank descriptions.
+- Regex, AI categorization, recurring detection, and background rule jobs are later enhancements.
+- Users should be able to review and correct rule results before dashboards rely on them heavily.

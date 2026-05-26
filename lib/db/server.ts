@@ -13,6 +13,7 @@ import type {
   UploadedFile
 } from "@/lib/db/types";
 import { calculateStagedStatusCounts } from "@/lib/imports/review";
+import { normalizeMerchantDescription } from "@/lib/transactions/merchant-normalization";
 
 export async function getCurrentUser(): Promise<User | null> {
   const supabase = await createClient();
@@ -82,7 +83,7 @@ export async function loadTransactions(
     let query = admin
       .from("transactions")
       .select(
-        "id,user_id,account_id,import_batch_id,transaction_date,description_raw,description_clean,amount,currency,direction,category_id,duplicate_key,created_at,financial_accounts(id,name),transaction_categories(name),import_batches(id)"
+        "id,user_id,account_id,import_batch_id,merchant_id,transaction_date,description_raw,description_clean,amount,currency,direction,category_id,is_subscription,is_transfer,duplicate_key,created_at,financial_accounts(id,name),transaction_categories(id,name),merchants(id,canonical_name,normalized_key),import_batches(id)"
       )
       .eq("user_id", user.id)
       .is("deleted_at", null)
@@ -90,7 +91,9 @@ export async function loadTransactions(
       .limit(200);
 
     if (filters.search) {
-      query = query.ilike("description_raw", `%${filters.search}%`);
+      query = query.or(
+        `description_raw.ilike.%${filters.search}%,description_clean.ilike.%${filters.search}%`
+      );
     }
 
     if (filters.accountId) {
@@ -101,7 +104,9 @@ export async function loadTransactions(
       query = query.eq("direction", filters.direction);
     }
 
-    if (filters.categoryId) {
+    if (filters.uncategorized) {
+      query = query.is("category_id", null);
+    } else if (filters.categoryId) {
       query = query.eq("category_id", filters.categoryId);
     }
 
@@ -296,16 +301,29 @@ async function withPageData<T>(loader: (user: User) => Promise<T>): Promise<Page
 }
 
 function normalizeTransactionListItem(row: Record<string, unknown>): TransactionListItem {
+  const merchantRelation = firstRelation(row.merchants) as TransactionListItem["merchants"];
+  const normalizedMerchant = normalizeMerchantDescription(
+    String(row.description_clean || row.description_raw || "")
+  );
+
   return {
     ...(row as Omit<
       TransactionListItem,
-      "financial_accounts" | "transaction_categories" | "import_batches"
+      | "financial_accounts"
+      | "transaction_categories"
+      | "merchants"
+      | "import_batches"
+      | "merchant_display_name"
+      | "merchant_normalized_key"
     >),
     financial_accounts: firstRelation(row.financial_accounts) as TransactionListItem["financial_accounts"],
     transaction_categories: firstRelation(
       row.transaction_categories
     ) as TransactionListItem["transaction_categories"],
-    import_batches: firstRelation(row.import_batches) as TransactionListItem["import_batches"]
+    merchants: merchantRelation,
+    import_batches: firstRelation(row.import_batches) as TransactionListItem["import_batches"],
+    merchant_display_name: merchantRelation?.canonical_name ?? normalizedMerchant.displayName,
+    merchant_normalized_key: merchantRelation?.normalized_key ?? normalizedMerchant.normalizedKey
   };
 }
 
