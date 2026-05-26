@@ -74,6 +74,7 @@ export type StagedTransaction = {
   status: string;
   error_code: string | null;
   error_message: string | null;
+  reviewed_at: string | null;
 };
 
 export type Transaction = {
@@ -96,6 +97,21 @@ export type TransactionListItem = Transaction & {
   financial_accounts: Pick<FinancialAccount, "id" | "name"> | null;
   transaction_categories: { name: string } | null;
   import_batches: { id: string } | null;
+};
+
+export type TransactionCategory = {
+  id: string;
+  name: string;
+  slug: string;
+};
+
+export type TransactionFilters = {
+  search?: string;
+  accountId?: string;
+  direction?: string;
+  categoryId?: string;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 export type PageData<T> =

@@ -178,6 +178,17 @@ Expected review result:
 - descriptions are preserved, including descriptions with unquoted commas
 - rows still require review before final commit
 
+### Import Review Corrections
+
+The review page supports pre-commit corrections:
+
+- adjust detected column mappings and reprocess the existing staged rows
+- edit staged transaction date, posted date, description, amount, currency, direction, and status
+- bulk approve, skip, or mark rows as needs review
+- explicitly override duplicate staged rows when a duplicate really should be imported
+
+Only rows with status `approved` are committed to `transactions`. Invalid, duplicate, skipped, and needs-review rows remain in staging. Reprocessing does not upload a new raw file and does not write final transactions.
+
 ## Vercel Deployment
 
 1. Import `DiveshSingh97/PersonalFin` into Vercel.
