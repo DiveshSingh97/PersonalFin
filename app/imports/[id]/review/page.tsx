@@ -20,6 +20,7 @@ import {
   updateStagedRowAction
 } from "@/lib/imports/actions";
 import { formatInteger, formatMoney } from "@/lib/format";
+import { parseEditableNumber, toDateInputValue, toNumberInputValue } from "@/lib/imports/edit-values";
 import type { FinancialAccount, ImportBatch, StagedTransaction, UploadedFile } from "@/lib/db/types";
 import type { StagedStatusCounts } from "@/lib/imports/review";
 
@@ -82,9 +83,9 @@ function ReviewContent({ data }: { data: ReviewData }) {
     Boolean(mappingValue(data.batch.mapping_json, "postedDate")) ||
     data.stagedTransactions.some((row) => Boolean(row.posted_date));
   const stagedGridColumns = showPostedDate
-    ? "grid-cols-[48px_72px_150px_150px_360px_150px_120px_150px_150px_320px]"
-    : "grid-cols-[48px_72px_150px_430px_150px_120px_150px_150px_320px]";
-  const stagedTableWidth = showPostedDate ? "min-w-[1650px]" : "min-w-[1500px]";
+    ? "grid-cols-[48px_72px_150px_150px_360px_150px_120px_150px_150px_220px_96px]"
+    : "grid-cols-[48px_72px_150px_430px_150px_120px_150px_150px_220px_96px]";
+  const stagedTableWidth = showPostedDate ? "min-w-[1640px]" : "min-w-[1490px]";
 
   return (
     <div className="space-y-6">
@@ -242,9 +243,8 @@ function ReviewContent({ data }: { data: ReviewData }) {
               <div className="px-3 py-3">Currency</div>
               <div className="px-3 py-3">Direction</div>
               <div className="px-3 py-3">Status</div>
-              <div className="sticky right-0 z-10 border-l border-line bg-slate-50 px-3 py-3">
-                Issue / action
-              </div>
+              <div className="px-3 py-3">Issue</div>
+              <div className="sticky right-0 z-10 border-l border-line bg-slate-50 px-3 py-3">Save</div>
             </div>
             {data.stagedTransactions.length === 0 ? (
               <EmptyState
@@ -278,8 +278,9 @@ function ReviewContent({ data }: { data: ReviewData }) {
                     <div className="px-3 py-2">
                       <input
                         className={fieldClassName}
-                        defaultValue={dateInputValue(row.transaction_date)}
+                        defaultValue={toDateInputValue(row.transaction_date)}
                         disabled={isLocked}
+                        lang="en-CA"
                         name="transaction_date"
                         type="date"
                       />
@@ -288,8 +289,9 @@ function ReviewContent({ data }: { data: ReviewData }) {
                       <div className="px-3 py-2">
                         <input
                           className={fieldClassName}
-                          defaultValue={dateInputValue(row.posted_date)}
+                          defaultValue={toDateInputValue(row.posted_date)}
                           disabled={isLocked || !mappingValue(data.batch.mapping_json, "postedDate")}
+                          lang="en-CA"
                           name="posted_date"
                           type="date"
                         />
@@ -307,15 +309,16 @@ function ReviewContent({ data }: { data: ReviewData }) {
                       {showPostedDate ? null : <input name="posted_date" type="hidden" value="" />}
                       <input
                         className={fieldClassName}
-                        defaultValue={numberInputValue(row.amount)}
+                        defaultValue={toNumberInputValue(row.amount)}
                         disabled={isLocked}
+                        lang="en-US"
                         name="amount"
                         step="0.01"
                         type="number"
                       />
-                      {numberValue(row.amount) !== null && row.currency ? (
+                      {parseEditableNumber(row.amount) !== null && row.currency ? (
                         <p className="mt-1 text-xs font-semibold text-slate-500">
-                          {formatMoney(numberValue(row.amount) ?? 0, row.currency)}
+                          {formatMoney(parseEditableNumber(row.amount) ?? 0, row.currency)}
                         </p>
                       ) : null}
                     </div>
@@ -358,16 +361,22 @@ function ReviewContent({ data }: { data: ReviewData }) {
                         <StatusBadge status={row.status} />
                       </div>
                     </div>
-                    <div className="sticky right-0 border-l border-line bg-white px-3 py-2 shadow-[-8px_0_12px_rgba(15,23,42,0.06)]">
-                      <p className="min-h-6 text-xs leading-5 text-slate-600">
+                    <div className="px-3 py-2">
+                      <p className="min-h-6 break-words text-xs leading-5 text-slate-600">
                         {row.error_message ||
                           (row.duplicate_candidate_transaction_id
                             ? `Duplicate ${row.duplicate_candidate_transaction_id.slice(0, 8)}`
                             : "No issue")}
                       </p>
-                      <button className="mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-cyan-800 hover:bg-cyan-50 hover:text-cyan-950 disabled:cursor-not-allowed disabled:text-slate-400" disabled={isLocked || row.status === "committed"}>
-                        <Save className="h-3.5 w-3.5" aria-hidden="true" />
-                        Save row
+                    </div>
+                    <div className="sticky right-0 border-l border-line bg-white px-3 py-2 shadow-[-6px_0_10px_rgba(15,23,42,0.04)]">
+                      <button
+                        aria-label={`Save row ${row.row_number}`}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400"
+                        disabled={isLocked || row.status === "committed"}
+                        title="Save row"
+                      >
+                        <Save className="h-4 w-4" aria-hidden="true" />
                       </button>
                     </div>
                   </form>
@@ -402,49 +411,4 @@ function InfoTerm({ label, value, wide }: { label: string; value: string; wide?:
 function mappingValue(mapping: Record<string, unknown>, key: string) {
   const value = mapping[key];
   return typeof value === "string" ? value : "";
-}
-
-function dateInputValue(value: string | null) {
-  if (!value) {
-    return "";
-  }
-
-  const trimmed = value.trim();
-  const isoDate = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(trimmed);
-  if (isoDate) {
-    return `${isoDate[1]}-${isoDate[2].padStart(2, "0")}-${isoDate[3].padStart(2, "0")}`;
-  }
-
-  const yearFirstSlash = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(trimmed);
-  if (yearFirstSlash) {
-    return `${yearFirstSlash[1]}-${yearFirstSlash[2].padStart(2, "0")}-${yearFirstSlash[3].padStart(2, "0")}`;
-  }
-
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime())) {
-    return "";
-  }
-
-  return `${parsed.getUTCFullYear().toString().padStart(4, "0")}-${(parsed.getUTCMonth() + 1)
-    .toString()
-    .padStart(2, "0")}-${parsed.getUTCDate().toString().padStart(2, "0")}`;
-}
-
-function numberInputValue(value: number | string | null) {
-  const parsed = numberValue(value);
-  return parsed === null ? "" : parsed.toFixed(2);
-}
-
-function numberValue(value: number | string | null) {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const normalized = value.trim().replace(/\s/g, "").replace(",", ".");
-  const parsed = Number.parseFloat(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
 }
